@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import {
   parseIncludeLine,
   resolveLocalHeaderPath,
-  STANDARD_HEADER_CATALOG
+  isStandardHeader
 } from './header-hover-provider';
 
 /**
@@ -32,10 +32,7 @@ export class CppIncludeDocumentLinkProvider implements vscode.DocumentLinkProvid
         continue;
       }
 
-      if (
-        parsed.isStandard &&
-        Object.prototype.hasOwnProperty.call(STANDARD_HEADER_CATALOG, parsed.headerName.toLowerCase())
-      ) {
+      if (parsed.isStandard && isStandardHeader(parsed.headerName)) {
         continue;
       }
 

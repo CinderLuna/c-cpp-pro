@@ -4,6 +4,7 @@ import * as path from 'path';
 import { getStlEntriesByHeader, StlDocEntry } from './stl-knowledge-base';
 import { StlRemoteProvider } from './stl-remote-provider';
 import { makeFindReferencesLink } from './command-links';
+import { ExternalSdkDetector } from '../prober/external-sdk-detector';
 
 export interface ParsedIncludeDirective {
   headerText: string;
@@ -176,6 +177,20 @@ export const STANDARD_HEADER_CATALOG: Record<string, StandardHeaderMetadata> = {
     standard: 'C++98 / C++11 / C++20',
     docUrl: 'https://en.cppreference.com/w/cpp/iterator',
     libraryType: 'cpp'
+  },
+  limits: {
+    summary: 'Standard numeric limits and fundamental arithmetic type properties via the std::numeric_limits template.',
+    standard: 'C++98 / C++11 / C++20',
+    docUrl: 'https://en.cppreference.com/w/cpp/types/numeric_limits',
+    libraryType: 'cpp',
+    primarySymbols: ['numeric_limits']
+  },
+  locale: {
+    summary: 'Localization and internationalization facilities, cultural formatting rules, and character classification facets.',
+    standard: 'C++98 / C++11',
+    docUrl: 'https://en.cppreference.com/w/cpp/locale/locale',
+    libraryType: 'cpp',
+    primarySymbols: ['locale', 'has_facet', 'use_facet']
   },
   ranges: {
     summary: 'Range algorithms, views, pipelines, and adaptors providing lazy, composable sequence processing without intermediate allocations.',
@@ -708,6 +723,424 @@ export const STANDARD_HEADER_CATALOG: Record<string, StandardHeaderMetadata> = {
 };
 
 /**
+ * Windows SDK and Win32 system headers.
+ */
+export const KNOWN_WIN32_HEADERS = new Set<string>([
+  'windows.h', 'winsock2.h', 'ws2tcpip.h', 'windef.h', 'winuser.h', 'wingdi.h',
+  'windowsx.h', 'winbase.h', 'winreg.h', 'winerror.h', 'synchapi.h', 'fileapi.h',
+  'processthreadsapi.h', 'handleapi.h', 'memoryapi.h', 'io.h', 'direct.h', 'conio.h',
+  'tchar.h', 'process.h', 'crtdbg.h', 'shellapi.h', 'shlwapi.h', 'commctrl.h'
+]);
+
+/**
+ * POSIX and Unix system headers.
+ */
+export const KNOWN_POSIX_HEADERS = new Set<string>([
+  'unistd.h', 'pthread.h', 'fcntl.h', 'dirent.h', 'poll.h', 'sys/types.h', 'sys/stat.h',
+  'sys/time.h', 'sys/wait.h', 'sys/mman.h', 'sys/socket.h', 'sys/select.h', 'sys/ioctl.h',
+  'sys/uio.h', 'sys/un.h', 'netinet/in.h', 'netinet/tcp.h', 'arpa/inet.h', 'netdb.h',
+  'termios.h', 'semaphore.h', 'sched.h', 'dlfcn.h', 'sys/resource.h', 'sys/utsname.h', 'sys/param.h'
+]);
+
+/**
+ * Comprehensive set of verified ISO C++, ISO C, Windows SDK, and POSIX standard headers.
+ */
+export const KNOWN_STANDARD_HEADERS = new Set<string>([
+  // Containers
+  'array', 'vector', 'deque', 'forward_list', 'list', 'map', 'set',
+  'unordered_map', 'unordered_set', 'queue', 'stack', 'flat_map', 'flat_set', 'span', 'mdspan',
+  // Strings and Streams
+  'string', 'string_view', 'regex', 'format', 'print', 'iostream', 'istream', 'ostream',
+  'fstream', 'sstream', 'syncstream', 'spanstream', 'streambuf', 'strstream', 'iomanip',
+  'ios', 'iosfwd',
+  // Numerics and Math
+  'cmath', 'math.h', 'complex', 'complex.h', 'numeric', 'valarray', 'random', 'ratio',
+  'cfenv', 'fenv.h', 'bit', 'numbers', 'linalg',
+  // Concurrency
+  'thread', 'jthread', 'mutex', 'shared_mutex', 'condition_variable', 'future', 'atomic',
+  'stdatomic.h', 'barrier', 'latch', 'semaphore', 'stop_token', 'rcu', 'hazard_pointer',
+  // Utilities and Language Support
+  'utility', 'tuple', 'optional', 'variant', 'any', 'expected', 'bitset', 'functional',
+  'type_traits', 'typeindex', 'typeinfo', 'chrono', 'initializer_list', 'memory',
+  'memory_resource', 'scoped_allocator', 'new', 'exception', 'stdexcept', 'system_error',
+  'source_location', 'stacktrace', 'version', 'compare', 'concepts', 'coroutine',
+  'debugging', 'text_encoding', 'charconv', 'execution', 'generator', 'filesystem',
+  'limits', 'algorithm', 'iterator', 'ranges', 'locale', 'codecvt',
+  // C Standard Library
+  'cassert', 'assert.h', 'cctype', 'ctype.h', 'cerrno', 'errno.h', 'cfloat', 'float.h',
+  'cinttypes', 'inttypes.h', 'climits', 'limits.h', 'clocale', 'locale.h', 'csetjmp',
+  'setjmp.h', 'csignal', 'signal.h', 'cstdarg', 'stdarg.h', 'cstddef', 'stddef.h',
+  'cstdint', 'stdint.h', 'cstdio', 'stdio.h', 'cstdlib', 'stdlib.h', 'cstring', 'string.h',
+  'ctime', 'time.h', 'cuchar', 'uchar.h', 'cwchar', 'wchar.h', 'cwctype', 'wctype.h',
+  'cstdbool', 'stdbool.h', 'ciso646', 'iso646.h', 'ctgmath', 'tgmath.h', 'cstdalign',
+  'stdalign.h', 'stdnoreturn.h', 'threads.h', 'stdbit.h', 'stdckdint.h',
+  // Windows SDK core system headers
+  ...KNOWN_WIN32_HEADERS,
+  // POSIX / Unix core system headers
+  ...KNOWN_POSIX_HEADERS
+]);
+
+/**
+ * Validates whether a header name represents a genuine standard library or platform system header.
+ */
+export function isStandardHeader(headerName: string): boolean {
+  if (!headerName) return false;
+  const norm = headerName.trim().toLowerCase().replace(/^<|>$/g, '');
+  if (KNOWN_STANDARD_HEADERS.has(norm)) {
+    return true;
+  }
+  if (Object.prototype.hasOwnProperty.call(STANDARD_HEADER_CATALOG, norm)) {
+    return true;
+  }
+  if (norm.endsWith('.h')) {
+    const cxxKey = 'c' + norm.slice(0, -2);
+    if (Object.prototype.hasOwnProperty.call(STANDARD_HEADER_CATALOG, cxxKey)) {
+      return true;
+    }
+  } else if (norm.startsWith('c') && !norm.includes('.')) {
+    const cKey = norm.slice(1) + '.h';
+    if (Object.prototype.hasOwnProperty.call(STANDARD_HEADER_CATALOG, cKey)) {
+      return true;
+    }
+  }
+  if (getStlEntriesByHeader(norm).length > 0) {
+    return true;
+  }
+  if (StlRemoteProvider.getInstance().getOfflineEntriesByHeader(norm).length > 0) {
+    return true;
+  }
+  return false;
+}
+
+export interface ExternalHeaderInfo {
+  sdkName: string;
+  categoryTag: string;
+  summary: string;
+  docUrl?: string;
+  docLabel?: string;
+}
+
+/**
+ * Detects whether a header belongs to a recognized external SDK or library (Qt, Vulkan, raylib, Boost, SDL, CUDA, etc.).
+ */
+export function detectExternalSdk(headerName: string, resolvedPath?: string): ExternalHeaderInfo | null {
+  const cleanKey = headerName.trim().replace(/^["<]|['">]$/g, '').replace(/\\/g, '/');
+  const lowerKey = cleanKey.toLowerCase();
+  const normPath = resolvedPath ? resolvedPath.replace(/\\/g, '/') : '';
+  const lowerPath = normPath.toLowerCase();
+
+  // 1. Qt Framework
+  const isQtPath =
+    lowerPath.includes('/qt/') ||
+    lowerPath.includes('/qt5/') ||
+    lowerPath.includes('/qt6/') ||
+    lowerPath.includes('/qtbase/') ||
+    lowerPath.includes('/qtdeclarative/') ||
+    lowerPath.includes('\\qt\\') ||
+    lowerPath.includes('\\qt5\\') ||
+    lowerPath.includes('\\qt6\\') ||
+    lowerPath.includes('\\qtbase\\') ||
+    lowerPath.includes('\\qtdeclarative\\') ||
+    /[/\\]include[/\\]qt[a-z0-9_]*/i.test(normPath);
+
+  const isQtModulePrefix =
+    /^(?:Qt(?:Core|Gui|Widgets|Network|Quick|Qml|Sql|Svg|Test|Xml|OpenGL|PrintSupport|Concurrent|Multimedia|Bluetooth|Positioning|Sensors|SerialPort|WebEngine|WebSockets|RemoteObjects|3D)[A-Za-z0-9_]*\/)/i.test(
+      cleanKey
+    );
+
+  const isQtClassName =
+    /^Q[A-Z][a-zA-Z0-9_]*(?:\.h|\.hpp)?$/.test(cleanKey) ||
+    /^Qt[A-Z0-9_]+(?:\.h|\.hpp)?$/.test(cleanKey) ||
+    /^(?:qstackedwidget|qwidget|qobject|qpushbutton|qdialog|qapplication|qmainwindow|qlabel|qlineedit|qtextedit|qcombobox|qcheckbox|qradiobutton|qspinbox|qslider|qprogressbar|qtableview|qtreeview|qlistview|qaction|qmenu|qmenubar|qstatusbar|qtoolbar|qsplitter|qtabwidget|qboxlayout|qgridlayout|qformlayout|qpixmap|qimage|qpainter|qcolor|qfont|qfile|qdir|qprocess|qtimer|qthread|qmutex|qbytearray|qstring|qvector|qlist|qmap|qhash|qset|qvariant|qurl|qevent|qfileinfo|qdatetime|qsettings|qdebug|qtextstream|qdatastream|qcoreapplication|qguiapplication|qscopedpointer|qsharedpointer|qregularexpression|qnetworkaccessmanager|qnetworkreply|qnetworkrequest|qopenglwidget|qstandarditemmodel|qabstractitemmodel|qbytearrayview|qelapsedtimer|qwindow)(?:\.h|\.hpp)?$/i.test(
+      lowerKey
+    ) ||
+    (lowerKey.startsWith('q') && (isQtPath || isQtModulePrefix));
+
+  if (isQtPath || isQtModulePrefix || isQtClassName) {
+    let moduleSummary = 'Qt cross-platform application framework and widget toolkit.';
+    if (
+      lowerPath.includes('qtgui') ||
+      lowerKey.startsWith('qtgui/') ||
+      lowerKey === 'qwindow' ||
+      lowerKey === 'qwindow.h' ||
+      lowerKey.includes('painter') ||
+      lowerKey.includes('image') ||
+      lowerKey.includes('color')
+    ) {
+      moduleSummary = 'Part of the Qt GUI module providing windowing capabilities, 2D graphics, imaging, and fonts.';
+    } else if (
+      lowerPath.includes('qtwidgets') ||
+      lowerKey.startsWith('qtwidgets/') ||
+      lowerKey.includes('widget') ||
+      lowerKey.includes('button') ||
+      lowerKey.includes('dialog') ||
+      lowerKey.includes('layout')
+    ) {
+      moduleSummary = 'Part of the Qt Widgets module providing rich UI elements, layouts, and window management.';
+    } else if (
+      lowerPath.includes('qtcore') ||
+      lowerKey.startsWith('qtcore/') ||
+      lowerKey === 'qobject' ||
+      lowerKey === 'qstring' ||
+      lowerKey.includes('file') ||
+      lowerKey.includes('time') ||
+      lowerKey.includes('debug')
+    ) {
+      moduleSummary = 'Part of the Qt Core module providing foundational classes, event loops, meta-object system, and containers.';
+    } else if (
+      lowerPath.includes('qtnetwork') ||
+      lowerKey.startsWith('qtnetwork/') ||
+      lowerKey.includes('socket') ||
+      lowerKey.includes('http') ||
+      lowerKey.includes('network')
+    ) {
+      moduleSummary = 'Part of the Qt Network module providing TCP/IP, UDP, SSL/TLS, and HTTP communications.';
+    } else if (
+      lowerPath.includes('qtquick') ||
+      lowerPath.includes('qtqml') ||
+      lowerKey.startsWith('qtquick/') ||
+      lowerKey.startsWith('qtqml/') ||
+      lowerKey.includes('quick') ||
+      lowerKey.includes('qml')
+    ) {
+      moduleSummary = 'Part of the Qt Quick / QML declarative UI framework.';
+    }
+
+    const baseName = (cleanKey.split('/').pop() || cleanKey).replace(/\.(?:h|hpp)$/i, '');
+    const docName = baseName.toLowerCase();
+    const docUrl = `https://doc.qt.io/qt-6/${docName}.html`;
+
+    return {
+      sdkName: 'Qt Framework',
+      categoryTag: 'Qt Framework',
+      summary: moduleSummary,
+      docUrl,
+      docLabel: `Qt Documentation: <${cleanKey}>`
+    };
+  }
+
+  // 2. Vulkan SDK
+  if (
+    lowerKey.startsWith('vulkan/') ||
+    lowerKey.startsWith('vk_') ||
+    lowerKey === 'vulkan.h' ||
+    lowerKey === 'vulkan.hpp' ||
+    lowerPath.includes('/vulkan/') ||
+    lowerPath.includes('/vulkan-1')
+  ) {
+    return {
+      sdkName: 'Vulkan SDK',
+      categoryTag: 'Vulkan SDK',
+      summary: 'Vulkan high-performance, explicit, cross-platform 3D graphics and compute API.',
+      docUrl: 'https://registry.khronos.org/vulkan/specs/latest/man/html/',
+      docLabel: `Vulkan Specification: <${cleanKey}>`
+    };
+  }
+
+  // 3. raylib
+  if (
+    lowerKey === 'raylib.h' ||
+    lowerKey === 'raymath.h' ||
+    lowerKey === 'rlgl.h' ||
+    lowerKey === 'raygui.h' ||
+    lowerKey === 'physac.h' ||
+    lowerKey === 'reasings.h' ||
+    lowerKey === 'rcamera.h' ||
+    lowerKey.startsWith('raylib/') ||
+    lowerPath.includes('/raylib/') ||
+    lowerPath.includes('\\raylib\\') ||
+    lowerPath.endsWith('/raylib') ||
+    lowerPath.endsWith('\\raylib')
+  ) {
+    return {
+      sdkName: 'raylib',
+      categoryTag: 'raylib',
+      summary: 'A simple and easy-to-use library to enjoy videogames programming.',
+      docUrl: 'https://www.raylib.com/cheatsheet/cheatsheet.html',
+      docLabel: `raylib Cheatsheet: <${cleanKey}>`
+    };
+  }
+
+  // 4. Boost C++ Libraries
+  if (
+    lowerKey.startsWith('boost/') ||
+    lowerPath.includes('/boost/') ||
+    lowerPath.includes('\\boost\\') ||
+    /[/\\]boost_[0-9_]+[/\\]/i.test(normPath)
+  ) {
+    return {
+      sdkName: 'Boost C++ Libraries',
+      categoryTag: 'Boost C++ Libraries',
+      summary: 'Peer-reviewed portable C++ source libraries providing algorithms, data structures, and system interfaces.',
+      docUrl: 'https://www.boost.org/doc/libs/',
+      docLabel: `Boost Documentation: <${cleanKey}>`
+    };
+  }
+
+  // 5. Simple DirectMedia Layer (SDL)
+  if (
+    lowerKey.startsWith('sdl2/') ||
+    lowerKey.startsWith('sdl3/') ||
+    lowerKey.startsWith('sdl/') ||
+    lowerKey === 'sdl.h' ||
+    lowerKey === 'sdl_image.h' ||
+    lowerKey === 'sdl_ttf.h' ||
+    lowerKey === 'sdl_mixer.h' ||
+    lowerKey === 'sdl_net.h' ||
+    lowerKey === 'sdl_main.h' ||
+    lowerKey === 'sdl_opengl.h' ||
+    lowerKey === 'sdl_vulkan.h' ||
+    lowerPath.includes('/sdl2/') ||
+    lowerPath.includes('\\sdl2\\') ||
+    lowerPath.includes('/sdl3/') ||
+    lowerPath.includes('\\sdl3\\') ||
+    lowerPath.includes('/sdl/') ||
+    lowerPath.includes('\\sdl\\')
+  ) {
+    return {
+      sdkName: 'Simple DirectMedia Layer (SDL)',
+      categoryTag: 'SDL',
+      summary: 'Simple DirectMedia Layer cross-platform multimedia library providing low-level access to audio, input, and graphics hardware.',
+      docUrl: 'https://wiki.libsdl.org/',
+      docLabel: `SDL Documentation: <${cleanKey}>`
+    };
+  }
+
+  // 6. NVIDIA CUDA Toolkit
+  if (
+    lowerKey.startsWith('cuda') ||
+    lowerKey === 'device_launch_parameters.h' ||
+    lowerKey === 'cublas_v2.h' ||
+    lowerKey === 'cublas.h' ||
+    lowerKey === 'curand.h' ||
+    lowerKey === 'cufft.h' ||
+    lowerKey === 'cusolverdn.h' ||
+    lowerPath.includes('/cuda/') ||
+    lowerPath.includes('\\cuda\\') ||
+    lowerPath.includes('cuda_runtime')
+  ) {
+    return {
+      sdkName: 'NVIDIA CUDA Toolkit',
+      categoryTag: 'CUDA',
+      summary: 'NVIDIA CUDA parallel computing platform and programming model for GPU acceleration.',
+      docUrl: 'https://docs.nvidia.com/cuda/',
+      docLabel: `CUDA Documentation: <${cleanKey}>`
+    };
+  }
+
+  // 7. OpenCV
+  if (
+    lowerKey.startsWith('opencv2/') ||
+    lowerKey.startsWith('opencv/') ||
+    lowerPath.includes('/opencv2/') ||
+    lowerPath.includes('/opencv/')
+  ) {
+    return {
+      sdkName: 'OpenCV',
+      categoryTag: 'OpenCV',
+      summary: 'Open Source Computer Vision and Machine Learning Software Library.',
+      docUrl: 'https://docs.opencv.org/',
+      docLabel: `OpenCV Documentation: <${cleanKey}>`
+    };
+  }
+
+  // 8. nlohmann JSON
+  if (lowerKey.startsWith('nlohmann/') || lowerKey === 'json.hpp') {
+    return {
+      sdkName: 'JSON for Modern C++ (nlohmann)',
+      categoryTag: 'JSON Library',
+      summary: 'JSON for Modern C++ by Niels Lohmann.',
+      docUrl: 'https://json.nlohmann.me/',
+      docLabel: 'nlohmann JSON Documentation'
+    };
+  }
+
+  // 9. {fmt}
+  if (lowerKey.startsWith('fmt/')) {
+    return {
+      sdkName: '{fmt}',
+      categoryTag: 'Formatting Library',
+      summary: 'Fast, safe, and modern formatting library for C++.',
+      docUrl: 'https://fmt.dev/',
+      docLabel: '{fmt} Documentation'
+    };
+  }
+
+  // 10. spdlog
+  if (lowerKey.startsWith('spdlog/')) {
+    return {
+      sdkName: 'spdlog',
+      categoryTag: 'Logging Library',
+      summary: 'Very fast, header-only / compiled, C++ logging library.',
+      docUrl: 'https://github.com/gabime/spdlog',
+      docLabel: 'spdlog Repository'
+    };
+  }
+
+  // 11. GoogleTest
+  if (lowerKey.startsWith('gtest/') || lowerKey.startsWith('gmock/')) {
+    return {
+      sdkName: 'GoogleTest',
+      categoryTag: 'Testing Framework',
+      summary: 'Google Test and Mocking framework for C++.',
+      docUrl: 'https://google.github.io/googletest/',
+      docLabel: 'GoogleTest Documentation'
+    };
+  }
+
+  // 12. GLM
+  if (lowerKey.startsWith('glm/')) {
+    return {
+      sdkName: 'OpenGL Mathematics (GLM)',
+      categoryTag: 'Mathematics Library',
+      summary: 'OpenGL Mathematics (GLM) header-only C++ mathematics library for graphics software.',
+      docUrl: 'https://glm.g-truc.net/',
+      docLabel: 'GLM Documentation'
+    };
+  }
+
+  // 13. Eigen
+  if (lowerKey.startsWith('eigen/') || lowerKey.startsWith('unsupported/eigen/')) {
+    return {
+      sdkName: 'Eigen',
+      categoryTag: 'Linear Algebra Library',
+      summary: 'C++ template library for linear algebra: matrices, vectors, numerical solvers, and related algorithms.',
+      docUrl: 'https://eigen.tuxfamily.org/',
+      docLabel: 'Eigen Documentation'
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Canonicalizes a file system path for case-insensitive platforms like Windows.
+ */
+export function canonicalizePath(p: string): string {
+  const norm = path.normalize(p);
+  return process.platform === 'win32' ? norm.toLowerCase() : norm;
+}
+
+/**
+ * Checks whether a resolved file path is located outside the workspace folder boundaries.
+ */
+export function isPathOutsideWorkspace(filePath?: string, docUri?: vscode.Uri): boolean {
+  if (!filePath) return false;
+  let wsRoot: string | undefined;
+  if (docUri && vscode.workspace.getWorkspaceFolder) {
+    wsRoot = vscode.workspace.getWorkspaceFolder(docUri)?.uri.fsPath;
+  }
+  if (!wsRoot && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+    wsRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
+  }
+  if (!wsRoot) return false;
+  const canonWs = canonicalizePath(wsRoot);
+  const canonFile = canonicalizePath(filePath);
+  const rel = path.relative(canonWs, canonFile);
+  return rel.startsWith('..') || path.isAbsolute(rel);
+}
+
+/**
  * Extracts include directive details from a line of source code.
  */
 export function parseIncludeLine(
@@ -778,6 +1211,51 @@ export function extractPathFromClangdHover(hover: vscode.Hover): string | undefi
 }
 
 /**
+ * Synchronously checks if a file exists and is a regular file, suppressing errors.
+ */
+export function safeIsFile(filePath: string): boolean {
+  try {
+    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Asynchronously checks if a file exists and is a regular file, suppressing errors.
+ */
+export async function safeIsFileAsync(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.promises.stat(filePath);
+    return stat.isFile();
+  } catch {
+    return false;
+  }
+}
+
+interface SdkIncludeCacheEntry {
+  timestamp: number;
+  paths: string[];
+}
+const workspaceSdkIncludeCache = new Map<string, SdkIncludeCacheEntry>();
+const SDK_INCLUDE_CACHE_TTL_MS = 30_000;
+
+/**
+ * Returns cached workspace external SDK include paths to avoid repeated synchronous filesystem crawls.
+ */
+export function getCachedWorkspaceSdkIncludes(wsRoot: string): string[] {
+  const canon = canonicalizePath(wsRoot);
+  const now = Date.now();
+  const cached = workspaceSdkIncludeCache.get(canon);
+  if (cached && (now - cached.timestamp) < SDK_INCLUDE_CACHE_TTL_MS) {
+    return cached.paths;
+  }
+  const paths = ExternalSdkDetector.getWorkspaceIncludePaths(wsRoot);
+  workspaceSdkIncludeCache.set(canon, { timestamp: now, paths });
+  return paths;
+}
+
+/**
  * Resolves a local project header file on disk.
  */
 export function resolveLocalHeaderPath(
@@ -786,14 +1264,8 @@ export function resolveLocalHeaderPath(
   hintPath?: string,
   extraIncludeDirs?: string[]
 ): string | undefined {
-  if (hintPath) {
-    try {
-      if (fs.existsSync(hintPath) && fs.statSync(hintPath).isFile()) {
-        return hintPath;
-      }
-    } catch {
-      // Ignore
-    }
+  if (hintPath && safeIsFile(hintPath)) {
+    return hintPath;
   }
 
   if (!rawPath || rawPath.trim().length === 0) {
@@ -809,7 +1281,7 @@ export function resolveLocalHeaderPath(
 
       // 1. Direct relative candidate from document directory
       const relativeCandidate = path.resolve(docDir, normalizedRaw);
-      if (fs.existsSync(relativeCandidate) && fs.statSync(relativeCandidate).isFile()) {
+      if (safeIsFile(relativeCandidate)) {
         return relativeCandidate;
       }
 
@@ -826,7 +1298,7 @@ export function resolveLocalHeaderPath(
           path.basename(docDir).toLowerCase() === firstSegment.toLowerCase()
         ) {
           const strippedCandidate = path.resolve(docDir, restOfPath);
-          if (fs.existsSync(strippedCandidate) && fs.statSync(strippedCandidate).isFile()) {
+          if (safeIsFile(strippedCandidate)) {
             return strippedCandidate;
           }
         }
@@ -845,7 +1317,7 @@ export function resolveLocalHeaderPath(
           path.resolve(currentDir, 'inc', normalizedRaw)
         ];
         for (const cand of candidates) {
-          if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
+          if (safeIsFile(cand)) {
             return cand;
           }
         }
@@ -865,13 +1337,9 @@ export function resolveLocalHeaderPath(
   // 4. Extra include directories (e.g. from CMake, solution, or flags)
   if (extraIncludeDirs && extraIncludeDirs.length > 0) {
     for (const incDir of extraIncludeDirs) {
-      try {
-        const candidate = path.resolve(incDir, normalizedRaw);
-        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-          return candidate;
-        }
-      } catch {
-        // Ignore
+      const candidate = path.resolve(incDir, normalizedRaw);
+      if (safeIsFile(candidate)) {
+        return candidate;
       }
     }
   }
@@ -886,14 +1354,29 @@ export function resolveLocalHeaderPath(
         path.resolve(folder.uri.fsPath, 'inc', normalizedRaw)
       ];
       for (const candidate of candidates) {
-        try {
-          if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-            return candidate;
-          }
-        } catch {
-          // Ignore
+        if (safeIsFile(candidate)) {
+          return candidate;
         }
       }
+    }
+  }
+
+  // 6. External SDK include paths if workspace is known
+  if (documentUri) {
+    try {
+      const wsFolder = vscode.workspace.getWorkspaceFolder ? vscode.workspace.getWorkspaceFolder(documentUri) : undefined;
+      const wsRoot = wsFolder?.uri.fsPath;
+      if (wsRoot) {
+        const sdkIncludes = getCachedWorkspaceSdkIncludes(wsRoot);
+        for (const sdkDir of sdkIncludes) {
+          const cand = path.resolve(sdkDir, normalizedRaw);
+          if (safeIsFile(cand)) {
+            return cand;
+          }
+        }
+      }
+    } catch {
+      // Ignore
     }
   }
 
@@ -911,6 +1394,9 @@ const MAX_HEADER_CACHE_SIZE = 250;
 function getCachedSymbols(filePath: string, mtimeMs: number): LocalHeaderSymbol[] | null {
   const cached = headerContentCache.get(filePath);
   if (cached && cached.mtimeMs === mtimeMs) {
+    // Refresh LRU order: delete and re-insert
+    headerContentCache.delete(filePath);
+    headerContentCache.set(filePath, cached);
     return cached.symbols;
   }
   return null;
@@ -928,6 +1414,7 @@ function setCachedSymbols(filePath: string, mtimeMs: number, symbols: LocalHeade
 
 export function clearHeaderHoverCache(): void {
   headerContentCache.clear();
+  workspaceSdkIncludeCache.clear();
 }
 
 const RESERVED_CPP_KEYWORDS = new Set([
@@ -1036,6 +1523,49 @@ export function parseHeaderContent(content: string): LocalHeaderSymbol[] {
 }
 
 /**
+ * Detects if a header file is purely a forwarding wrapper (e.g. Qt's <QStackedWidget> -> "qstackedwidget.h").
+ * A forwarding header contains only an #include directive, comments, and optional preprocessor guards.
+ * It contains NO class, struct, enum, concept, or function definitions.
+ */
+export function getForwardedIncludeTarget(content: string): string | null {
+  const stripped = content
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '')
+    .trim();
+
+  // If there are any declarations or statements, it is not a forwarding header
+  if (
+    /\b(class|struct|enum|concept|using|typedef|namespace)\b/.test(stripped) ||
+    /\b(?:void|int|bool|double|float|char|auto)\s+[a-zA-Z0-9_]+\s*\(/.test(stripped)
+  ) {
+    return null;
+  }
+
+  const lines = stripped.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+  let includeTarget: string | null = null;
+
+  for (const line of lines) {
+    if (
+      line.startsWith('#pragma') ||
+      line.startsWith('#ifndef') ||
+      line.startsWith('#define') ||
+      line.startsWith('#endif')
+    ) {
+      continue;
+    }
+    const match = line.match(/^#\s*include\s*["<]([^">]+)[">]/);
+    if (match && !includeTarget) {
+      includeTarget = match[1];
+      continue;
+    }
+    // Any other code statement means it is not a pure forwarding header
+    return null;
+  }
+
+  return includeTarget;
+}
+
+/**
  * Statically parses a C++ local header file to extract declared classes, structs, concepts, and functions.
  * Uses mtime caching to avoid repeated disk reads.
  */
@@ -1046,9 +1576,32 @@ export function parseLocalHeaderFile(filePath: string): LocalHeaderSymbol[] {
     if (cached) {
       return cached;
     }
-    const content = fs.readFileSync(filePath, 'utf-8');
+    let targetPath = filePath;
+    let content = fs.readFileSync(filePath, 'utf-8');
+
+    // Follow forwarding headers (e.g. Qt QStackedWidget -> #include "qstackedwidget.h")
+    if (stat.size < 2000) {
+      const forwardedTarget = getForwardedIncludeTarget(content);
+      if (forwardedTarget) {
+        const candidate = path.resolve(path.dirname(filePath), forwardedTarget);
+        if (safeIsFile(candidate)) {
+          targetPath = candidate;
+          const targetStat = fs.statSync(candidate);
+          const targetCached = getCachedSymbols(candidate, targetStat.mtimeMs);
+          if (targetCached) {
+            setCachedSymbols(filePath, stat.mtimeMs, targetCached);
+            return targetCached;
+          }
+          content = fs.readFileSync(candidate, 'utf-8');
+        }
+      }
+    }
+
     const symbols = parseHeaderContent(content);
     setCachedSymbols(filePath, stat.mtimeMs, symbols);
+    if (targetPath !== filePath) {
+      setCachedSymbols(targetPath, fs.statSync(targetPath).mtimeMs, symbols);
+    }
     return symbols;
   } catch {
     return [];
@@ -1065,9 +1618,37 @@ export async function parseLocalHeaderFileAsync(filePath: string): Promise<Local
     if (cached) {
       return cached;
     }
-    const content = await fs.promises.readFile(filePath, 'utf-8');
+    let targetPath = filePath;
+    let content = await fs.promises.readFile(filePath, 'utf-8');
+
+    // Follow forwarding headers (e.g. Qt QStackedWidget -> #include "qstackedwidget.h")
+    if (stat.size < 2000) {
+      const forwardedTarget = getForwardedIncludeTarget(content);
+      if (forwardedTarget) {
+        const candidate = path.resolve(path.dirname(filePath), forwardedTarget);
+        if (await safeIsFileAsync(candidate)) {
+          targetPath = candidate;
+          const targetStat = await fs.promises.stat(candidate);
+          const targetCached = getCachedSymbols(candidate, targetStat.mtimeMs);
+          if (targetCached) {
+            setCachedSymbols(filePath, stat.mtimeMs, targetCached);
+            return targetCached;
+          }
+          content = await fs.promises.readFile(candidate, 'utf-8');
+        }
+      }
+    }
+
     const symbols = parseHeaderContent(content);
     setCachedSymbols(filePath, stat.mtimeMs, symbols);
+    if (targetPath !== filePath) {
+      try {
+        const targetStat = await fs.promises.stat(targetPath);
+        setCachedSymbols(targetPath, targetStat.mtimeMs, symbols);
+      } catch {
+        // Ignore
+      }
+    }
     return symbols;
   } catch {
     return [];
@@ -1097,27 +1678,32 @@ export function formatStandardHeaderHover(
     }
   }
 
-  // Determine library classification and badge
-  const isCHeader =
-    catalog?.libraryType === 'c' ||
-    (normKey.endsWith('.h') &&
-      !normKey.includes('windows') &&
-      !normKey.includes('winsock') &&
-      !normKey.includes('sys/') &&
-      !normKey.includes('unistd') &&
-      !normKey.includes('pthread') &&
-      !normKey.includes('fcntl') &&
-      !normKey.includes('dirent') &&
-      !normKey.includes('poll'));
+  // If not in catalog, no entries, and not in known standard headers, check if this is an external SDK
+  if (!catalog && entries.length === 0 && !KNOWN_STANDARD_HEADERS.has(normKey)) {
+    const extSdk = detectExternalSdk(normKey, resolvedPath);
+    if (extSdk) {
+      return formatExternalHeaderHover(
+        normKey,
+        extSdk,
+        [],
+        resolvedPath,
+        range,
+        true
+      );
+    }
+  }
 
+  // Determine library classification and badge
   const isWin32 =
     catalog?.libraryType === 'win32' ||
+    KNOWN_WIN32_HEADERS.has(normKey) ||
     normKey.includes('windows') ||
     normKey.includes('winsock') ||
     normKey.startsWith('win');
 
   const isPosix =
     catalog?.libraryType === 'posix' ||
+    KNOWN_POSIX_HEADERS.has(normKey) ||
     normKey.includes('sys/') ||
     normKey.includes('unistd') ||
     normKey.includes('pthread') ||
@@ -1125,6 +1711,12 @@ export function formatStandardHeaderHover(
     normKey.includes('dirent') ||
     normKey.includes('poll') ||
     normKey.includes('inet');
+
+  const isCHeader =
+    catalog?.libraryType === 'c' ||
+    (!isWin32 &&
+      !isPosix &&
+      (KNOWN_STANDARD_HEADERS.has(normKey) && normKey.endsWith('.h')));
 
   let libraryBadge = 'C++ Standard Library';
   let categoryTag = 'Standard Library';
@@ -1144,7 +1736,20 @@ export function formatStandardHeaderHover(
   const summary = catalog
     ? catalog.summary
     : `Standard ${libraryBadge} header providing foundational types, algorithms, and facilities.`;
-  const docUrl = catalog ? catalog.docUrl : `https://en.cppreference.com/w/cpp/header/${normKey}`;
+
+  let defaultDocUrl: string;
+  if (isWin32) {
+    const baseWinName = normKey.replace(/\.h$/, '');
+    defaultDocUrl = `https://learn.microsoft.com/en-us/windows/win32/api/${baseWinName}/`;
+  } else if (isPosix) {
+    defaultDocUrl = `https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/${normKey}.html`;
+  } else if (isCHeader) {
+    const cName = normKey.replace(/\.h$/, '');
+    defaultDocUrl = `https://en.cppreference.com/w/c/header/${cName}`;
+  } else {
+    defaultDocUrl = `https://en.cppreference.com/w/cpp/header/${normKey}`;
+  }
+  const docUrl = catalog ? catalog.docUrl : defaultDocUrl;
 
   const md = new vscode.MarkdownString();
   md.isTrusted = true;
@@ -1238,6 +1843,90 @@ export function formatStandardHeaderHover(
 }
 
 /**
+ * Formats a rich hover card for an external SDK or third-party library header.
+ */
+export function formatExternalHeaderHover(
+  headerName: string,
+  sdkInfo: ExternalHeaderInfo,
+  symbols: LocalHeaderSymbol[],
+  resolvedPath?: string,
+  range?: vscode.Range,
+  isAngled = true,
+  docUri?: vscode.Uri,
+  pos?: vscode.Position
+): vscode.Hover {
+  const md = new vscode.MarkdownString();
+  md.isTrusted = true;
+
+  const headerDisplay = isAngled ? `<${headerName}>` : `"${headerName}"`;
+  md.appendMarkdown(`### Header \`${headerDisplay}\` *(${sdkInfo.sdkName})*\n\n`);
+  if (sdkInfo.categoryTag.toLowerCase() === sdkInfo.sdkName.toLowerCase()) {
+    md.appendMarkdown(`**Category**: \`[${sdkInfo.categoryTag}]\` \`[${headerDisplay}]\`\n\n`);
+  } else {
+    md.appendMarkdown(
+      `**Category**: \`[${sdkInfo.categoryTag}]\` \`[${headerDisplay}]\` \`[${sdkInfo.sdkName}]\`\n\n`
+    );
+  }
+  md.appendMarkdown(`${sdkInfo.summary}\n\n`);
+
+  if (resolvedPath) {
+    md.appendMarkdown(`**Resolved Path**: \`${resolvedPath}\`\n\n`);
+  }
+
+  const types = symbols.filter(
+    (s) => s.kind === 'class' || s.kind === 'struct' || s.kind === 'enum'
+  );
+  const concepts = symbols.filter((s) => s.kind === 'concept');
+  const functions = symbols.filter((s) => s.kind === 'function');
+
+  if (types.length > 0) {
+    md.appendMarkdown(`#### Declared Types (${types.length})\n\n`);
+    for (const t of types) {
+      md.appendMarkdown(`- \`${t.kind}\` **\`${t.name}\`**\n`);
+    }
+    md.appendMarkdown('\n');
+  }
+
+  if (concepts.length > 0) {
+    md.appendMarkdown(`#### Declared Concepts (${concepts.length})\n\n`);
+    for (const c of concepts) {
+      md.appendMarkdown(`- \`concept\` **\`${c.name}\`**\n`);
+    }
+    md.appendMarkdown('\n');
+  }
+
+  if (functions.length > 0) {
+    md.appendMarkdown(`#### Declared Functions (${functions.length})\n\n`);
+    md.appendMarkdown('| Function | Signature |\n');
+    md.appendMarkdown('| :--- | :--- |\n');
+    for (const f of functions) {
+      const sigEscaped = (f.signature || f.name).replace(/\|/g, '\\|');
+      md.appendMarkdown(`| \`${f.name}\` | \`${sigEscaped}\` |\n`);
+    }
+    md.appendMarkdown('\n');
+  }
+
+  const footerLinks: string[] = [];
+  if (sdkInfo.docUrl) {
+    const label = sdkInfo.docLabel || `${sdkInfo.sdkName} Documentation`;
+    footerLinks.push(`[${label}](${sdkInfo.docUrl})`);
+  }
+  if (resolvedPath) {
+    footerLinks.push(`[Switch Header/Source](command:c-cpp-pro.switchSourceHeader)`);
+    if (docUri) {
+      footerLinks.push(makeFindReferencesLink(docUri, pos));
+    }
+  }
+
+  if (footerLinks.length > 0) {
+    md.appendMarkdown('---\n');
+    md.appendMarkdown(footerLinks.join(' | ') + '\n');
+  }
+
+  return new vscode.Hover(md, range);
+}
+
+/**
  * Formats a rich hover card for a project / local header.
  */
 export function formatLocalHeaderHover(
@@ -1246,12 +1935,14 @@ export function formatLocalHeaderHover(
   resolvedPath?: string,
   range?: vscode.Range,
   docUri?: vscode.Uri,
-  pos?: vscode.Position
+  pos?: vscode.Position,
+  isAngled = false
 ): vscode.Hover {
   const md = new vscode.MarkdownString();
   md.isTrusted = true;
 
-  md.appendMarkdown(`### Header \`"${headerName}"\` *(Project Header)*\n\n`);
+  const headerDisplay = isAngled ? `<${headerName}>` : `"${headerName}"`;
+  md.appendMarkdown(`### Header \`${headerDisplay}\` *(Project Header)*\n\n`);
 
   if (resolvedPath) {
     md.appendMarkdown(`**Path**: \`${resolvedPath}\`\n\n`);
@@ -1318,7 +2009,29 @@ export class HeaderHoverProvider {
     includeInfo: ParsedIncludeDirective,
     resolvedPath?: string
   ): Promise<vscode.Hover | null> {
-    if (includeInfo.isStandard) {
+    const isAngled = includeInfo.headerText.startsWith('<');
+
+    // 1. If quoted include (e.g. #include "time.h"), check workspace first
+    if (!isAngled) {
+      const resolved = resolveLocalHeaderPath(includeInfo.headerName, document.uri, resolvedPath);
+      if (resolved && !isPathOutsideWorkspace(resolved, document.uri)) {
+        const symbols = await parseLocalHeaderFileAsync(resolved);
+        return formatLocalHeaderHover(
+          includeInfo.headerName,
+          symbols,
+          resolved,
+          includeInfo.range,
+          document.uri,
+          position,
+          false
+        );
+      }
+    }
+
+    // 2. Standard library / platform headers
+    const isStandard = isStandardHeader(includeInfo.headerName);
+
+    if (isStandard) {
       let entries = getStlEntriesByHeader(includeInfo.headerName);
       if (entries.length === 0) {
         const sysEntries = StlRemoteProvider.getInstance().getOfflineEntriesByHeader(includeInfo.headerName);
@@ -1335,17 +2048,76 @@ export class HeaderHoverProvider {
       );
     }
 
-    // Local / project header
+    // 3. Resolve local or SDK header path
     const resolved = resolveLocalHeaderPath(includeInfo.headerName, document.uri, resolvedPath);
-    const symbols = resolved ? await parseLocalHeaderFileAsync(resolved) : [];
 
+    // 4. External SDK detection (Qt, Vulkan, raylib, Boost, SDL, CUDA, etc.)
+    const externalSdk = detectExternalSdk(includeInfo.headerName, resolved);
+
+    if (externalSdk) {
+      const symbols = resolved ? await parseLocalHeaderFileAsync(resolved) : [];
+      return formatExternalHeaderHover(
+        includeInfo.headerName,
+        externalSdk,
+        symbols,
+        resolved,
+        includeInfo.range,
+        isAngled,
+        document.uri,
+        position
+      );
+    }
+
+    // Check if resolved path is outside the workspace (external library / third-party)
+    const isExternal = isPathOutsideWorkspace(resolved, document.uri);
+    if (isExternal && resolved) {
+      const symbols = await parseLocalHeaderFileAsync(resolved);
+      const extInfo: ExternalHeaderInfo = {
+        sdkName: 'External Library',
+        categoryTag: 'External Library',
+        summary: 'External library header providing types, interfaces, and function declarations.'
+      };
+      return formatExternalHeaderHover(
+        includeInfo.headerName,
+        extInfo,
+        symbols,
+        resolved,
+        includeInfo.range,
+        isAngled,
+        document.uri,
+        position
+      );
+    }
+
+    // If unresolved and was included with angle brackets, treat as external header rather than project header
+    if (!resolved && isAngled) {
+      const extInfo: ExternalHeaderInfo = {
+        sdkName: 'External Header',
+        categoryTag: 'External Header',
+        summary: 'External library or system header referenced via include search paths.'
+      };
+      return formatExternalHeaderHover(
+        includeInfo.headerName,
+        extInfo,
+        [],
+        undefined,
+        includeInfo.range,
+        isAngled,
+        document.uri,
+        position
+      );
+    }
+
+    // Local / project header
+    const symbols = resolved ? await parseLocalHeaderFileAsync(resolved) : [];
     return formatLocalHeaderHover(
       includeInfo.headerName,
       symbols,
       resolved,
       includeInfo.range,
       document.uri,
-      position
+      position,
+      isAngled
     );
   }
 }

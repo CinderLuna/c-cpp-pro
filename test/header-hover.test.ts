@@ -11,7 +11,10 @@ import {
   parseLocalHeaderFile,
   resolveLocalHeaderPath,
   formatStandardHeaderHover,
-  formatLocalHeaderHover
+  formatLocalHeaderHover,
+  formatExternalHeaderHover,
+  detectExternalSdk,
+  isStandardHeader
 } from '../src/intelligence/header-hover-provider';
 import { createClangdMiddleware } from '../src/substrate/protocol-filter';
 import { CppIncludeDocumentLinkProvider } from '../src/intelligence/document-links';
@@ -449,6 +452,30 @@ void renderMesh(const Shape3D& shape, ColorMode mode);
       assert.ok(md.includes('`multiply`'));
       assert.ok(md.includes('[Switch Header/Source]'));
     });
+
+    it('should format external header hover card with sdk details and documentation links', () => {
+      const symbols = [
+        { name: 'VkInstance', kind: 'struct' as const }
+      ];
+      const hover = formatExternalHeaderHover(
+        'vulkan/vulkan.h',
+        {
+          sdkName: 'Vulkan SDK',
+          categoryTag: 'Vulkan SDK',
+          summary: 'Vulkan graphics API',
+          docUrl: 'https://registry.khronos.org/vulkan/specs/latest/man/html/'
+        },
+        symbols,
+        '/opt/vulkan/include/vulkan/vulkan.h'
+      );
+      const md = (hover.contents as any).value || (hover.contents[0] as any).value;
+
+      assert.ok(md.includes('### Header `<vulkan/vulkan.h>` *(Vulkan SDK)*'));
+      assert.ok(md.includes('**Category**: `[Vulkan SDK]` `[<vulkan/vulkan.h>]`'));
+      assert.ok(md.includes('**Resolved Path**: `/opt/vulkan/include/vulkan/vulkan.h`'));
+      assert.ok(md.includes('`VkInstance`'));
+      assert.ok(md.includes('https://registry.khronos.org/vulkan/specs/latest/man/html/'));
+    });
   });
 
   describe('Language Server Protocol Filter Integration', () => {
@@ -534,67 +561,470 @@ void renderMesh(const Shape3D& shape, ColorMode mode);
       assert.ok(middleware.provideDefinition);
 
       const tempAppDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-cpp-pro-def-test-'));
-      const appDir = path.join(tempAppDir, 'src', 'application');
-      fs.mkdirSync(appDir, { recursive: true });
-      const targetHeader = path.join(appDir, 'Editing.h');
-      fs.writeFileSync(targetHeader, '#pragma once\n', 'utf8');
-
-      const mockDoc: any = {
-        lineAt: (_line: number) => ({ text: '#include "application/Editing.h"' }),
-        uri: vscode.Uri.file(path.join(appDir, 'Editing.cpp'))
-      };
-      const mockPos = new mockVscode.Position(0, 15);
-      const mockToken = {} as any;
-
-      // Mock next returning null/empty
-      const mockNext = async () => null;
-
-      const result = (await middleware.provideDefinition!(
-        mockDoc,
-        mockPos,
-        mockToken,
-        mockNext
-      )) as vscode.Location;
-
-      assert.ok(result);
-      assert.strictEqual(path.normalize(result.uri.fsPath), path.normalize(targetHeader));
-      assert.strictEqual(result.range.start.line, 0);
-
       try {
-        fs.rmSync(tempAppDir, { recursive: true, force: true });
-      } catch {
-        // Ignore
+        const appDir = path.join(tempAppDir, 'src', 'application');
+        fs.mkdirSync(appDir, { recursive: true });
+        const targetHeader = path.join(appDir, 'Editing.h');
+        fs.writeFileSync(targetHeader, '#pragma once\n', 'utf8');
+
+        const mockDoc: any = {
+          lineAt: (_line: number) => ({ text: '#include "application/Editing.h"' }),
+          uri: vscode.Uri.file(path.join(appDir, 'Editing.cpp'))
+        };
+        const mockPos = new mockVscode.Position(0, 15);
+        const mockToken = {} as any;
+
+        // Mock next returning null/empty
+        const mockNext = async () => null;
+
+        const result = (await middleware.provideDefinition!(
+          mockDoc,
+          mockPos,
+          mockToken,
+          mockNext
+        )) as vscode.Location;
+
+        assert.ok(result);
+        assert.strictEqual(path.normalize(result.uri.fsPath), path.normalize(targetHeader));
+        assert.strictEqual(result.range.start.line, 0);
+      } finally {
+        try {
+          fs.rmSync(tempAppDir, { recursive: true, force: true });
+        } catch {
+          // Ignore
+        }
       }
     });
 
     it('should extract document links for resolved local header includes', () => {
       const tempAppDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-cpp-pro-doclink-test-'));
-      const appDir = path.join(tempAppDir, 'src', 'application');
-      fs.mkdirSync(appDir, { recursive: true });
-      const targetHeader = path.join(appDir, 'Editing.h');
-      fs.writeFileSync(targetHeader, '#pragma once\n', 'utf8');
+      try {
+        const appDir = path.join(tempAppDir, 'src', 'application');
+        fs.mkdirSync(appDir, { recursive: true });
+        const targetHeader = path.join(appDir, 'Editing.h');
+        fs.writeFileSync(targetHeader, '#pragma once\n', 'utf8');
 
-      const docUri = vscode.Uri.file(path.join(appDir, 'Editing.cpp'));
+        const docUri = vscode.Uri.file(path.join(appDir, 'Editing.cpp'));
+        const mockDoc: any = {
+          lineCount: 2,
+          lineAt: (i: number) => ({
+            text: i === 0 ? '#include "application/Editing.h"' : 'int x = 0;'
+          }),
+          uri: docUri
+        };
+
+        const provider = new CppIncludeDocumentLinkProvider();
+        const links = provider.provideDocumentLinks(mockDoc, {} as any);
+
+        assert.strictEqual(links.length, 1);
+        assert.ok(links[0].target);
+        assert.strictEqual(path.normalize(links[0].target.fsPath), path.normalize(targetHeader));
+      } finally {
+        try {
+          fs.rmSync(tempAppDir, { recursive: true, force: true });
+        } catch {
+          // Ignore
+        }
+      }
+    });
+  });
+
+  describe('isStandardHeader & External SDK Classification', () => {
+    it('should correctly classify ISO C++, C, Windows SDK, and POSIX headers as standard', () => {
+      assert.strictEqual(isStandardHeader('vector'), true);
+      assert.strictEqual(isStandardHeader('string'), true);
+      assert.strictEqual(isStandardHeader('cmath'), true);
+      assert.strictEqual(isStandardHeader('iostream'), true);
+      assert.strictEqual(isStandardHeader('algorithm'), true);
+      assert.strictEqual(isStandardHeader('stdio.h'), true);
+      assert.strictEqual(isStandardHeader('cstdio'), true);
+      assert.strictEqual(isStandardHeader('math.h'), true);
+      assert.strictEqual(isStandardHeader('windows.h'), true);
+      assert.strictEqual(isStandardHeader('winsock2.h'), true);
+      assert.strictEqual(isStandardHeader('unistd.h'), true);
+      assert.strictEqual(isStandardHeader('sys/stat.h'), true);
+    });
+
+    it('should not classify external SDK and third-party library headers as standard', () => {
+      assert.strictEqual(isStandardHeader('qstackedwidget'), false);
+      assert.strictEqual(isStandardHeader('QStackedWidget'), false);
+      assert.strictEqual(isStandardHeader('QtWidgets/QStackedWidget'), false);
+      assert.strictEqual(isStandardHeader('vulkan/vulkan.h'), false);
+      assert.strictEqual(isStandardHeader('raylib.h'), false);
+      assert.strictEqual(isStandardHeader('boost/asio.hpp'), false);
+      assert.strictEqual(isStandardHeader('SDL2/SDL.h'), false);
+      assert.strictEqual(isStandardHeader('SDL.h'), false);
+      assert.strictEqual(isStandardHeader('cuda_runtime.h'), false);
+      assert.strictEqual(isStandardHeader('opencv2/opencv.hpp'), false);
+      assert.strictEqual(isStandardHeader('engine/mesh.h'), false);
+    });
+
+    it('should detect Qt SDK headers and provide Qt documentation URL', () => {
+      const qsw = detectExternalSdk('qstackedwidget', 'F:\\Apps\\Qt\\6.9.3\\mingw_64\\include\\QtWidgets\\QStackedWidget');
+      assert.ok(qsw);
+      assert.strictEqual(qsw.sdkName, 'Qt Framework');
+      assert.ok(qsw.summary.includes('Qt Widgets'));
+      assert.strictEqual(qsw.docUrl, 'https://doc.qt.io/qt-6/qstackedwidget.html');
+
+      const qObj = detectExternalSdk('QObject');
+      assert.ok(qObj);
+      assert.strictEqual(qObj.sdkName, 'Qt Framework');
+      assert.ok(qObj.summary.includes('Qt Core'));
+      assert.strictEqual(qObj.docUrl, 'https://doc.qt.io/qt-6/qobject.html');
+
+      const qtMod = detectExternalSdk('QtWidgets/QStackedWidget');
+      assert.ok(qtMod);
+      assert.strictEqual(qtMod.sdkName, 'Qt Framework');
+      assert.strictEqual(qtMod.docUrl, 'https://doc.qt.io/qt-6/qstackedwidget.html');
+    });
+
+    it('should detect Vulkan, raylib, Boost, SDL, and CUDA headers', () => {
+      const vulkan = detectExternalSdk('vulkan/vulkan.h');
+      assert.ok(vulkan);
+      assert.strictEqual(vulkan.sdkName, 'Vulkan SDK');
+      assert.ok(vulkan.docUrl?.includes('khronos.org'));
+
+      const raylib = detectExternalSdk('raylib.h');
+      assert.ok(raylib);
+      assert.strictEqual(raylib.sdkName, 'raylib');
+      assert.ok(raylib.docUrl?.includes('raylib.com'));
+
+      const boost = detectExternalSdk('boost/asio.hpp');
+      assert.ok(boost);
+      assert.strictEqual(boost.sdkName, 'Boost C++ Libraries');
+
+      const sdl = detectExternalSdk('SDL2/SDL.h');
+      assert.ok(sdl);
+      assert.strictEqual(sdl.sdkName, 'Simple DirectMedia Layer (SDL)');
+
+      const cuda = detectExternalSdk('cuda_runtime.h');
+      assert.ok(cuda);
+      assert.strictEqual(cuda.sdkName, 'NVIDIA CUDA Toolkit');
+    });
+  });
+
+  describe('External SDK & Library Hover Rendering', () => {
+    it('should format Qt header hover card without C++ Standard Library or cppreference badges', async () => {
+      const hover = await HeaderHoverProvider.provideHeaderHover(
+        { uri: vscode.Uri.file('/workspace/src/main.cpp') } as any,
+        new mockVscode.Position(0, 0),
+        {
+          headerName: 'qstackedwidget',
+          headerText: '<qstackedwidget>',
+          isStandard: true,
+          range: new mockVscode.Range(0, 0, 0, 26)
+        },
+        'F:\\Apps\\Qt\\6.9.3\\mingw_64\\include\\QtWidgets\\QStackedWidget'
+      );
+
+      assert.ok(hover);
+      const md = (hover.contents as any).value || (hover.contents[0] as any).value;
+      assert.ok(md.includes('### Header `<qstackedwidget>` *(Qt Framework)*'));
+      assert.ok(md.includes('**Category**: `[Qt Framework]` `[<qstackedwidget>]`'));
+      assert.ok(md.includes('Part of the Qt Widgets module'));
+      assert.ok(md.includes('**Resolved Path**: `F:\\Apps\\Qt\\6.9.3\\mingw_64\\include\\QtWidgets\\QStackedWidget`'));
+      assert.ok(md.includes('https://doc.qt.io/qt-6/qstackedwidget.html'));
+      assert.ok(!md.includes('C++ Standard Library'));
+      assert.ok(!md.includes('cppreference'));
+    });
+
+    it('should format Vulkan header hover without Standard Library badges', async () => {
+      const hover = await HeaderHoverProvider.provideHeaderHover(
+        { uri: vscode.Uri.file('/workspace/src/main.cpp') } as any,
+        new mockVscode.Position(0, 0),
+        {
+          headerName: 'vulkan/vulkan.h',
+          headerText: '<vulkan/vulkan.h>',
+          isStandard: true,
+          range: new mockVscode.Range(0, 0, 0, 27)
+        }
+      );
+
+      assert.ok(hover);
+      const md = (hover.contents as any).value || (hover.contents[0] as any).value;
+      assert.ok(md.includes('### Header `<vulkan/vulkan.h>` *(Vulkan SDK)*'));
+      assert.ok(md.includes('**Category**: `[Vulkan SDK]` `[<vulkan/vulkan.h>]`'));
+      assert.ok(!md.includes('C++ Standard Library'));
+      assert.ok(!md.includes('cppreference'));
+    });
+
+    it('should format raylib header hover without C Standard Library badges', async () => {
+      const hover = await HeaderHoverProvider.provideHeaderHover(
+        { uri: vscode.Uri.file('/workspace/src/main.cpp') } as any,
+        new mockVscode.Position(0, 0),
+        {
+          headerName: 'raylib.h',
+          headerText: '<raylib.h>',
+          isStandard: true,
+          range: new mockVscode.Range(0, 0, 0, 20)
+        }
+      );
+
+      assert.ok(hover);
+      const md = (hover.contents as any).value || (hover.contents[0] as any).value;
+      assert.ok(md.includes('### Header `<raylib.h>` *(raylib)*'));
+      assert.ok(md.includes('**Category**: `[raylib]` `[<raylib.h>]`'));
+      assert.ok(md.includes('https://www.raylib.com/cheatsheet/cheatsheet.html'));
+      assert.ok(!md.includes('C Standard Library'));
+      assert.ok(!md.includes('C++ Standard Library'));
+      assert.ok(!md.includes('cppreference'));
+    });
+
+    it('should follow forwarding headers like Qt QStackedWidget to extract declared classes', async () => {
+      const tempQtDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-cpp-pro-qt-test-'));
+      try {
+        const widgetsDir = path.join(tempQtDir, 'QtWidgets');
+        fs.mkdirSync(widgetsDir, { recursive: true });
+
+        // Target header containing the actual class
+        const targetHeader = path.join(widgetsDir, 'qstackedwidget.h');
+        fs.writeFileSync(
+          targetHeader,
+          'class QStackedWidget : public QFrame {\npublic:\n  int count() const;\n};\n',
+          'utf8'
+        );
+
+        // Forwarding header
+        const forwardHeader = path.join(widgetsDir, 'QStackedWidget');
+        fs.writeFileSync(forwardHeader, '#include "qstackedwidget.h"\n', 'utf8');
+
+        const symbols = parseLocalHeaderFile(forwardHeader);
+        assert.ok(symbols.length > 0);
+        assert.strictEqual(symbols[0].name, 'QStackedWidget');
+        assert.strictEqual(symbols[0].kind, 'class');
+      } finally {
+        try {
+          fs.rmSync(tempQtDir, { recursive: true, force: true });
+        } catch {
+          // Ignore
+        }
+      }
+    });
+
+    it('should not treat small headers defining their own classes as forwarding headers', () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-cpp-pro-nofwd-test-'));
+      try {
+        const headerFile = path.join(tempDir, 'ilogger.h');
+        fs.writeFileSync(
+          headerFile,
+          '#pragma once\n#include <string>\n\nclass ILogger {\npublic:\n    virtual ~ILogger() = default;\n    virtual void log(const std::string& msg) = 0;\n};\n',
+          'utf8'
+        );
+        const symbols = parseLocalHeaderFile(headerFile);
+        assert.strictEqual(symbols.length, 1);
+        assert.strictEqual(symbols[0].name, 'ILogger');
+        assert.strictEqual(symbols[0].kind, 'class');
+      } finally {
+        try {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        } catch {
+          // Ignore
+        }
+      }
+    });
+
+    it('should classify Windows SDK header <fileapi.h> with Microsoft Learn link and no cppreference', async () => {
+      const hover = await HeaderHoverProvider.provideHeaderHover(
+        { uri: vscode.Uri.file('/workspace/src/main.cpp') } as any,
+        new mockVscode.Position(0, 0),
+        {
+          headerName: 'fileapi.h',
+          headerText: '<fileapi.h>',
+          isStandard: true,
+          range: new mockVscode.Range(0, 0, 0, 19)
+        }
+      );
+
+      assert.ok(hover);
+      const md = (hover.contents as any).value || (hover.contents[0] as any).value;
+      assert.ok(md.includes('### Header `<fileapi.h>` *(Windows SDK / Win32 API)*'));
+      assert.ok(md.includes('**Standard**: `[Windows SDK]` `[<fileapi.h>]` `[Windows SDK / Win32 API]`'));
+      assert.ok(md.includes('https://learn.microsoft.com/en-us/windows/win32/api/fileapi/'));
+      assert.ok(!md.includes('cppreference'));
+      assert.ok(!md.includes('C Standard Library'));
+    });
+
+    it('should classify POSIX header <termios.h> with OpenGroup doc link and no cppreference', async () => {
+      const hover = await HeaderHoverProvider.provideHeaderHover(
+        { uri: vscode.Uri.file('/workspace/src/main.c') } as any,
+        new mockVscode.Position(0, 0),
+        {
+          headerName: 'termios.h',
+          headerText: '<termios.h>',
+          isStandard: true,
+          range: new mockVscode.Range(0, 0, 0, 19)
+        }
+      );
+
+      assert.ok(hover);
+      const md = (hover.contents as any).value || (hover.contents[0] as any).value;
+      assert.ok(md.includes('### Header `<termios.h>` *(POSIX System Library)*'));
+      assert.ok(md.includes('**Standard**: `[POSIX Library]` `[<termios.h>]` `[POSIX System Library]`'));
+      assert.ok(md.includes('https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/termios.h.html'));
+      assert.ok(!md.includes('cppreference'));
+    });
+
+    it('should format Boost header hover with Boost documentation link', async () => {
+      const hover = await HeaderHoverProvider.provideHeaderHover(
+        { uri: vscode.Uri.file('/workspace/src/main.cpp') } as any,
+        new mockVscode.Position(0, 0),
+        {
+          headerName: 'boost/asio.hpp',
+          headerText: '<boost/asio.hpp>',
+          isStandard: true,
+          range: new mockVscode.Range(0, 0, 0, 24)
+        }
+      );
+
+      assert.ok(hover);
+      const md = (hover.contents as any).value || (hover.contents[0] as any).value;
+      assert.ok(md.includes('### Header `<boost/asio.hpp>` *(Boost C++ Libraries)*'));
+      assert.ok(md.includes('https://www.boost.org/doc/libs/'));
+      assert.ok(!md.includes('C++ Standard Library'));
+      assert.ok(!md.includes('cppreference'));
+    });
+
+    it('should format SDL header hover with SDL documentation link', async () => {
+      const hover = await HeaderHoverProvider.provideHeaderHover(
+        { uri: vscode.Uri.file('/workspace/src/main.cpp') } as any,
+        new mockVscode.Position(0, 0),
+        {
+          headerName: 'SDL2/SDL.h',
+          headerText: '<SDL2/SDL.h>',
+          isStandard: true,
+          range: new mockVscode.Range(0, 0, 0, 20)
+        }
+      );
+
+      assert.ok(hover);
+      const md = (hover.contents as any).value || (hover.contents[0] as any).value;
+      assert.ok(md.includes('### Header `<SDL2/SDL.h>` *(Simple DirectMedia Layer (SDL))*'));
+      assert.ok(md.includes('https://wiki.libsdl.org/'));
+      assert.ok(!md.includes('C++ Standard Library'));
+      assert.ok(!md.includes('cppreference'));
+    });
+
+    it('should format CUDA header hover with CUDA documentation link', async () => {
+      const hover = await HeaderHoverProvider.provideHeaderHover(
+        { uri: vscode.Uri.file('/workspace/src/main.cpp') } as any,
+        new mockVscode.Position(0, 0),
+        {
+          headerName: 'cuda_runtime.h',
+          headerText: '<cuda_runtime.h>',
+          isStandard: true,
+          range: new mockVscode.Range(0, 0, 0, 24)
+        }
+      );
+
+      assert.ok(hover);
+      const md = (hover.contents as any).value || (hover.contents[0] as any).value;
+      assert.ok(md.includes('### Header `<cuda_runtime.h>` *(NVIDIA CUDA Toolkit)*'));
+      assert.ok(md.includes('https://docs.nvidia.com/cuda/'));
+      assert.ok(!md.includes('C++ Standard Library'));
+      assert.ok(!md.includes('cppreference'));
+    });
+
+    it('should prioritize workspace local header over standard header for quoted includes', async () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-cpp-pro-quoted-time-'));
+      try {
+        const localTimeHeader = path.join(tempDir, 'time.h');
+        fs.writeFileSync(
+          localTimeHeader,
+          '#pragma once\nclass CustomTimer {\npublic:\n    void start();\n};\n',
+          'utf8'
+        );
+
+        const docUri = vscode.Uri.file(path.join(tempDir, 'main.cpp'));
+        const hover = await HeaderHoverProvider.provideHeaderHover(
+          { uri: docUri } as any,
+          new mockVscode.Position(0, 0),
+          {
+            headerName: 'time.h',
+            headerText: '"time.h"',
+            isStandard: false,
+            range: new mockVscode.Range(0, 0, 0, 16)
+          }
+        );
+
+        assert.ok(hover);
+        const md = (hover.contents as any).value || (hover.contents[0] as any).value;
+        assert.ok(md.includes('### Header `"time.h"` *(Project Header)*'));
+        assert.ok(md.includes('CustomTimer'));
+        assert.ok(!md.includes('C Standard Library'));
+      } finally {
+        try {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        } catch {
+          // Ignore
+        }
+      }
+    });
+
+    it('should exclude standard headers from document links but link local quoted headers', () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-cpp-pro-doclink-std-'));
+      try {
+        const localHeader = path.join(tempDir, 'local.h');
+        fs.writeFileSync(localHeader, '#pragma once\n', 'utf8');
+
+        const docUri = vscode.Uri.file(path.join(tempDir, 'main.cpp'));
+        const mockDoc: any = {
+          lineCount: 3,
+          lineAt: (i: number) => {
+            const lines = [
+              '#include <vector>',
+              '#include <stdio.h>',
+              '#include "local.h"'
+            ];
+            return { text: lines[i] };
+          },
+          uri: docUri
+        };
+
+        const provider = new CppIncludeDocumentLinkProvider();
+        const links = provider.provideDocumentLinks(mockDoc, { isCancellationRequested: false } as any);
+
+        assert.strictEqual(links.length, 1);
+        assert.ok(links[0].target);
+        assert.strictEqual(path.normalize(links[0].target.fsPath), path.normalize(localHeader));
+
+        // Test cancellation token
+        const cancelledLinks = provider.provideDocumentLinks(mockDoc, { isCancellationRequested: true } as any);
+        assert.strictEqual(cancelledLinks.length, 0);
+      } finally {
+        try {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        } catch {
+          // Ignore
+        }
+      }
+    });
+
+    it('should intercept hover via Clangd middleware for Qt include and format as Qt Framework', async () => {
+      const middleware = createClangdMiddleware();
+      assert.ok(middleware.provideHover);
+
       const mockDoc: any = {
-        lineCount: 2,
-        lineAt: (i: number) => ({
-          text: i === 0 ? '#include "application/Editing.h"' : 'int x = 0;'
-        }),
-        uri: docUri
+        lineAt: (_line: number) => ({ text: '#include <qstackedwidget>' }),
+        uri: vscode.Uri.file('/workspace/src/main.cpp')
+      };
+      const mockPos = new mockVscode.Position(0, 10);
+      const mockToken = {} as any;
+
+      // Mock Clangd language server returning resolved Qt header path
+      const mockNext = async () => {
+        return new mockVscode.Hover([
+          new mockVscode.MarkdownString('qstackedwidget\n\nF:/Apps/Qt/6.9.3/mingw_64/include/QtWidgets/QStackedWidget')
+        ]);
       };
 
-      const provider = new CppIncludeDocumentLinkProvider();
-      const links = provider.provideDocumentLinks(mockDoc, {} as any);
+      const result = await middleware.provideHover!(mockDoc, mockPos, mockToken, mockNext);
+      assert.ok(result);
+      const md = (result.contents as any).value || (result.contents[0] as any).value;
 
-      assert.strictEqual(links.length, 1);
-      assert.ok(links[0].target);
-      assert.strictEqual(path.normalize(links[0].target.fsPath), path.normalize(targetHeader));
-
-      try {
-        fs.rmSync(tempAppDir, { recursive: true, force: true });
-      } catch {
-        // Ignore
-      }
+      assert.ok(md.includes('### Header `<qstackedwidget>` *(Qt Framework)*'));
+      assert.ok(md.includes('Part of the Qt Widgets module'));
+      assert.ok(!md.includes('C++ Standard Library'));
+      assert.ok(!md.includes('cppreference'));
     });
   });
 });
