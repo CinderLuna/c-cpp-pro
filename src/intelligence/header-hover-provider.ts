@@ -2049,13 +2049,13 @@ export class HeaderHoverProvider {
     }
 
     // 3. Resolve local or SDK header path
-    const resolved = resolveLocalHeaderPath(includeInfo.headerName, document.uri, resolvedPath);
+    const resolved = resolveLocalHeaderPath(includeInfo.headerName, document.uri, resolvedPath) || resolvedPath;
 
     // 4. External SDK detection (Qt, Vulkan, raylib, Boost, SDL, CUDA, etc.)
     const externalSdk = detectExternalSdk(includeInfo.headerName, resolved);
 
     if (externalSdk) {
-      const symbols = resolved ? await parseLocalHeaderFileAsync(resolved) : [];
+      const symbols = (resolved && safeIsFile(resolved)) ? await parseLocalHeaderFileAsync(resolved) : [];
       return formatExternalHeaderHover(
         includeInfo.headerName,
         externalSdk,
@@ -2071,7 +2071,7 @@ export class HeaderHoverProvider {
     // Check if resolved path is outside the workspace (external library / third-party)
     const isExternal = isPathOutsideWorkspace(resolved, document.uri);
     if (isExternal && resolved) {
-      const symbols = await parseLocalHeaderFileAsync(resolved);
+      const symbols = safeIsFile(resolved) ? await parseLocalHeaderFileAsync(resolved) : [];
       const extInfo: ExternalHeaderInfo = {
         sdkName: 'External Library',
         categoryTag: 'External Library',
@@ -2109,7 +2109,7 @@ export class HeaderHoverProvider {
     }
 
     // Local / project header
-    const symbols = resolved ? await parseLocalHeaderFileAsync(resolved) : [];
+    const symbols = (resolved && safeIsFile(resolved)) ? await parseLocalHeaderFileAsync(resolved) : [];
     return formatLocalHeaderHover(
       includeInfo.headerName,
       symbols,
