@@ -1,6 +1,6 @@
 # C/C++ Pro: Fast C/C++ Extension for Visual Studio Code
 
-[![CI](https://github.com/funtohard/c-cpp-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/funtohard/c-cpp-pro/actions/workflows/ci.yml)
+[![CI](https://github.com/CinderLuna/c-cpp-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/CinderLuna/c-cpp-pro/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![VS Code Engine](https://img.shields.io/badge/VS%20Code-%5E1.85.0-brightgreen.svg)](https://code.visualstudio.com/)
 [![Language](https://img.shields.io/badge/Language-C%20%2F%20C%2B%2B%20%2F%20CUDA-00599C.svg)](https://isocpp.org/)
@@ -9,7 +9,7 @@ C/C++ Pro combines the blazing index and AST completion speed of LLVM's **`clang
 
 ---
 
-[Wiki](https://github.com/FunToHard/c-cpp-pro/wiki) | [Issues](https://github.com/FunToHard/c-cpp-pro/issues)
+[Wiki](https://github.com/CinderLuna/c-cpp-pro/wiki) | [Issues](https://github.com/CinderLuna/c-cpp-pro/issues)
 
 ## Why C/C++ Pro?
 
