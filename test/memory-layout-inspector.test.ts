@@ -493,10 +493,11 @@ Player p;
         assert.strictEqual(layout?.name, 'Player');
         assert.strictEqual(layout?.totalSize, 8);
 
-        // Verify active text editor was navigated to player.h
+        // Verify active text editor was navigated to player.h and selection applied
         const activeEditor = vscode.window.activeTextEditor;
         assert.ok(activeEditor);
         assert.ok(activeEditor?.document.fileName.endsWith('player.h'));
+        assert.ok(activeEditor?.selection.start.line !== undefined);
       } finally {
         inspector.dispose();
       }

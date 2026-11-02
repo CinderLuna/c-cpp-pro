@@ -574,6 +574,7 @@ export class HoverTransformer {
               layout = calculateStructLayout(parsed.name, parsed.fields, {
                 isPacked: parsed.isPacked,
                 maxPackAlignment: parsed.maxPackAlignment,
+                structAlignment: parsed.structAlignment,
                 dataModel
               });
             } catch {
@@ -981,6 +982,7 @@ export class HoverTransformer {
       return NativeBridge.calculateStructLayout(parsed.name, parsed.fields, {
         isPacked: parsed.isPacked,
         maxPackAlignment: parsed.maxPackAlignment,
+        structAlignment: parsed.structAlignment,
         dataModel
       });
     } catch {

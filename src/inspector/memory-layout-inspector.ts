@@ -621,10 +621,11 @@ export async function searchIncludesForStruct(
 ): Promise<HeaderStructMatch | null> {
   if (depth >= maxDepth) return null;
 
+  const cleanContent = content.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
   const includeRegex = /#\s*include\s*["<]([^">]+)[">]/g;
   const includeMatches: string[] = [];
   let m: RegExpExecArray | null;
-  while ((m = includeRegex.exec(content)) !== null) {
+  while ((m = includeRegex.exec(cleanContent)) !== null) {
     includeMatches.push(m[1].trim());
   }
 
@@ -968,18 +969,19 @@ export class MemoryLayoutInspector implements vscode.Disposable {
       }
     } else if (editorOrArgs && typeof editorOrArgs === 'object') {
       // 4. Object argument { uri/documentUri, line/character/position, structName }
-      const obj = editorOrArgs as Record<string, any>;
-      const rawUri = obj.documentUri ?? obj.uri;
+      const obj = editorOrArgs as Record<string, unknown>;
+      const rawUri = (obj['documentUri'] ?? obj['uri']) as string | vscode.Uri | undefined;
       if (rawUri) {
         targetUri = typeof rawUri === 'string' ? vscode.Uri.parse(rawUri) : (rawUri instanceof vscode.Uri ? rawUri : undefined);
       }
-      if (obj.position instanceof vscode.Position) {
-        targetPosition = obj.position;
-      } else if (typeof obj.line === 'number' && typeof obj.character === 'number') {
-        targetPosition = new vscode.Position(obj.line, obj.character);
+      const rawPos = obj['position'];
+      if (rawPos instanceof vscode.Position) {
+        targetPosition = rawPos;
+      } else if (typeof obj['line'] === 'number' && typeof obj['character'] === 'number') {
+        targetPosition = new vscode.Position(obj['line'], obj['character']);
       }
-      if (obj.structName && typeof obj.structName === 'string') {
-        targetStructName = obj.structName;
+      if (typeof obj['structName'] === 'string') {
+        targetStructName = obj['structName'];
       }
     }
 
