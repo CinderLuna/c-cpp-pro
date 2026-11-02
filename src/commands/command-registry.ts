@@ -90,9 +90,12 @@ export function registerAllCommands(ctx: CommandRegistryContext): vscode.Disposa
         }
       );
     }),
-    vscode.commands.registerCommand('c-cpp-pro.inspectMemoryLayout', () => {
-      memoryLayoutInspector.inspectCurrentStruct();
-    }),
+    vscode.commands.registerCommand(
+      'c-cpp-pro.inspectMemoryLayout',
+      async (uriOrArgs?: unknown, line?: number, character?: number, structName?: string) => {
+        return await memoryLayoutInspector.inspectCurrentStruct(uriOrArgs, line, character, structName);
+      }
+    ),
     vscode.commands.registerCommand('c-cpp-pro.analyzeIncludes', () => {
       includeVisualizer.analyzeActiveDocument();
     }),

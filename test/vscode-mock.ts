@@ -540,9 +540,18 @@ export const mockVscode: any = {
       warn: () => {},
       error: () => {}
     }),
-    showInformationMessage: async () => undefined,
-    showErrorMessage: async () => undefined,
-    showWarningMessage: async () => undefined,
+    showInformationMessage: async (msg: string, ..._items: any[]) => {
+      (mockVscode.window as any).lastInformationMessage = msg;
+      return undefined;
+    },
+    showErrorMessage: async (msg: string, ..._items: any[]) => {
+      (mockVscode.window as any).lastErrorMessage = msg;
+      return undefined;
+    },
+    showWarningMessage: async (msg: string, ..._items: any[]) => {
+      (mockVscode.window as any).lastWarningMessage = msg;
+      return undefined;
+    },
     withProgress: async (_options: any, task: any) => {
       return task({ report: () => {} }, { onCancellationRequested: () => {} });
     },
@@ -600,10 +609,15 @@ export const mockVscode: any = {
       };
     },
     showTextDocument: async (doc: any, _options?: any) => {
+      const sel = _options?.selection instanceof Range
+        ? new Selection(_options.selection.start, _options.selection.end)
+        : new Selection(new Position(0, 0), new Position(0, 0));
       const editor = {
         document: doc,
-        selection: new Selection(new Position(0, 0), new Position(0, 0)),
-        revealRange: () => {}
+        selection: sel,
+        revealRange: (_range: any, _revealType?: any) => {
+          (editor as any).lastRevealedRange = _range;
+        }
       };
       (mockVscode.window as any).activeTextEditor = editor;
       return editor;
@@ -618,13 +632,64 @@ export const mockVscode: any = {
     openTextDocument: async (uriOrPath: any) => {
       const fsPath = typeof uriOrPath === 'string' ? uriOrPath : uriOrPath?.fsPath ?? String(uriOrPath);
       const uri = typeof uriOrPath === 'string' ? Uri.file(uriOrPath) : uriOrPath;
+      let content = '';
+      try {
+        const fsModule = require('fs');
+        if (fsPath && fsModule.existsSync(fsPath) && !fsModule.statSync(fsPath).isDirectory()) {
+          content = fsModule.readFileSync(fsPath, 'utf-8');
+        }
+      } catch {
+        content = '';
+      }
+      const lines = content.split(/\r?\n/);
       return {
         uri,
         fileName: fsPath,
-        getText: () => '',
-        getWordRangeAtPosition: () => new Range(new Position(0, 0), new Position(0, 5)),
-        lineCount: 1,
-        lineAt: () => ({ text: '' })
+        getText: (range?: Range) => {
+          if (!range) return content;
+          let startOffset = 0;
+          for (let i = 0; i < range.start.line && i < lines.length; i++) {
+            startOffset += lines[i].length + 1;
+          }
+          startOffset += range.start.character;
+          let endOffset = 0;
+          for (let i = 0; i < range.end.line && i < lines.length; i++) {
+            endOffset += lines[i].length + 1;
+          }
+          endOffset += range.end.character;
+          return content.substring(startOffset, endOffset);
+        },
+        offsetAt: (pos: Position) => {
+          let offset = 0;
+          for (let i = 0; i < pos.line && i < lines.length; i++) {
+            offset += lines[i].length + 1;
+          }
+          return offset + (pos.character || 0);
+        },
+        positionAt: (offset: number) => {
+          let remaining = offset;
+          for (let i = 0; i < lines.length; i++) {
+            const lineLen = lines[i].length + 1;
+            if (remaining < lineLen) {
+              return new Position(i, remaining);
+            }
+            remaining -= lineLen;
+          }
+          return new Position(lines.length - 1, (lines[lines.length - 1] || '').length);
+        },
+        getWordRangeAtPosition: (pos: Position) => {
+          const line = lines[pos.line] || '';
+          const wordRegex = /[a-zA-Z_]\w*/g;
+          let m: RegExpExecArray | null;
+          while ((m = wordRegex.exec(line)) !== null) {
+            if (pos.character >= m.index && pos.character <= m.index + m[0].length) {
+              return new Range(new Position(pos.line, m.index), new Position(pos.line, m.index + m[0].length));
+            }
+          }
+          return undefined;
+        },
+        lineCount: lines.length,
+        lineAt: (lineIdx: number) => ({ text: lines[lineIdx] || '' })
       };
     },
     getConfiguration: (section?: string) => ({

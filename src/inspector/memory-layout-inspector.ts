@@ -1,5 +1,7 @@
+import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { NativeBridge } from '../native/native-bridge';
+import { canonicalizePath, resolveLocalHeaderPath } from '../intelligence/header-hover-provider';
 
 export interface FieldLayout {
   name: string;
@@ -128,6 +130,7 @@ export function resolveTypeInfo(typeStr: string, dataModel: DataModel = 'LP64'):
 export interface StructLayoutOptions {
   isPacked?: boolean;
   maxPackAlignment?: number;
+  structAlignment?: number;
   skipOptimization?: boolean;
   dataModel?: DataModel;
 }
@@ -146,7 +149,7 @@ export function calculateStructLayout(
 
   const fields: FieldLayout[] = [];
   let currentOffset = 0;
-  let maxStructAlignment = 1;
+  let maxStructAlignment = options.structAlignment ?? 1;
   let totalPaddingBytes = 0;
 
   for (const field of rawFields) {
@@ -342,6 +345,7 @@ export interface ParsedStruct {
   name: string;
   isPacked: boolean;
   maxPackAlignment?: number;
+  structAlignment?: number;
   fields: { type: string; name: string }[];
 }
 
@@ -483,15 +487,28 @@ export function extractStructFromRange(
   const isPacked = hasPackedAttr || (activePack !== undefined && activePack <= 1);
   const maxPackAlignment = activePack;
 
+  const headerText = structText.substring(0, openBraceIndex - startIndex);
+  const alignMatch = headerText.match(/alignas\s*\(\s*(\d+)\s*\)/);
+  const structAlignment = alignMatch ? parseInt(alignMatch[1], 10) : undefined;
+
   const fields = parseFieldsFromBody(body);
-  return { name: structName, isPacked, maxPackAlignment, fields };
+  return { name: structName, isPacked, maxPackAlignment, structAlignment, fields };
 }
 
-export function extractStructAtPosition(
+export interface StructDefinitionLocation {
+  parsed: ParsedStruct;
+  startIndex: number;
+  endIndex: number;
+}
+
+/**
+ * Parses struct, class, or union definition at the exact cursor offset in the document text.
+ */
+export function extractStructDefinitionAtPosition(
   text: string,
   cursorOffset: number
-): ParsedStruct | null {
-  const declRegex = /(?:struct|class)\s+([a-zA-Z_]\w*)\s*(?::\s*[^{]+)?\s*\{/g;
+): StructDefinitionLocation | null {
+  const declRegex = /(?:template\s*<[^{;]*>\s*)?(?:struct|class|union)\b(?:\s+(?:alignas\s*\([^)]*\)|\[\[[^\]]*\]\]))*\s+([a-zA-Z_]\w*)\b[^{;]*\{/g;
   let match: RegExpExecArray | null;
 
   while ((match = declRegex.exec(text)) !== null) {
@@ -502,8 +519,51 @@ export function extractStructAtPosition(
 
     if (cursorOffset >= startIndex && cursorOffset <= closeBraceIndex + 1) {
       const structName = match[1];
-      return extractStructFromRange(text, startIndex, openBraceIndex, closeBraceIndex, structName);
+      const parsed = extractStructFromRange(text, startIndex, openBraceIndex, closeBraceIndex, structName);
+      return {
+        parsed,
+        startIndex,
+        endIndex: closeBraceIndex + 1
+      };
     }
+  }
+
+  return null;
+}
+
+export function extractStructAtPosition(
+  text: string,
+  cursorOffset: number
+): ParsedStruct | null {
+  const found = extractStructDefinitionAtPosition(text, cursorOffset);
+  return found ? found.parsed : null;
+}
+
+/**
+ * Searches for a struct, class, or union definition with matching name in the document text.
+ */
+export function findStructDefinitionInText(
+  text: string,
+  name: string
+): StructDefinitionLocation | null {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const declRegex = new RegExp(
+    `(?:template\\s*<[^{;]*>\\s*)?(?:struct|class|union)\\b(?:\\s+(?:alignas\\s*\\([^)]*\\)|\\[\\[[^\\]]*\\]\\]))*\\s+${escapedName}\\b[^{;]*\\{`,
+    'g'
+  );
+  let match: RegExpExecArray | null;
+  while ((match = declRegex.exec(text)) !== null) {
+    const startIndex = match.index;
+    const openBraceIndex = match.index + match[0].length - 1;
+    const closeBraceIndex = findMatchingBrace(text, openBraceIndex);
+    if (closeBraceIndex === -1) continue;
+
+    const parsed = extractStructFromRange(text, startIndex, openBraceIndex, closeBraceIndex, name);
+    return {
+      parsed,
+      startIndex,
+      endIndex: closeBraceIndex + 1
+    };
   }
 
   return null;
@@ -513,17 +573,355 @@ export function findStructByName(
   text: string,
   name: string
 ): ParsedStruct | null {
-  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const declRegex = new RegExp(`(?:struct|class)\\s+${escapedName}\\b\\s*(?::\\s*[^{]+)?\\s*\\{`, 'g');
-  const match = declRegex.exec(text);
-  if (!match) return null;
+  const found = findStructDefinitionInText(text, name);
+  return found ? found.parsed : null;
+}
 
-  const startIndex = match.index;
-  const openBraceIndex = match.index + match[0].length - 1;
-  const closeBraceIndex = findMatchingBrace(text, openBraceIndex);
-  if (closeBraceIndex === -1) return null;
+/**
+ * Converts a 0-based character offset to a VS Code Position.
+ */
+export function offsetToPosition(text: string, offset: number): vscode.Position {
+  const sub = text.substring(0, offset);
+  const lines = sub.split(/\r?\n/);
+  const line = lines.length - 1;
+  const character = lines[lines.length - 1].length;
+  return new vscode.Position(line, character);
+}
 
-  return extractStructFromRange(text, startIndex, openBraceIndex, closeBraceIndex, name);
+export function getRangeFromOffsets(
+  doc: vscode.TextDocument,
+  text: string,
+  startIndex: number,
+  endIndex: number
+): vscode.Range {
+  if (typeof doc.positionAt === 'function') {
+    return new vscode.Range(doc.positionAt(startIndex), doc.positionAt(endIndex));
+  }
+  return new vscode.Range(offsetToPosition(text, startIndex), offsetToPosition(text, endIndex));
+}
+
+export interface HeaderStructMatch {
+  parsed: ParsedStruct;
+  uri: vscode.Uri;
+  range: vscode.Range;
+  document?: vscode.TextDocument;
+}
+
+/**
+ * Recursively scans #include directives in a document to locate a struct/class definition.
+ */
+export async function searchIncludesForStruct(
+  content: string,
+  docUri: vscode.Uri,
+  structName: string,
+  visited: Set<string>,
+  depth: number = 0,
+  maxDepth: number = 3,
+  extraIncludeDirs?: string[]
+): Promise<HeaderStructMatch | null> {
+  if (depth >= maxDepth) return null;
+
+  const includeRegex = /#\s*include\s*["<]([^">]+)[">]/g;
+  const includeMatches: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = includeRegex.exec(content)) !== null) {
+    includeMatches.push(m[1].trim());
+  }
+
+  const workspaceFolders = vscode.workspace.workspaceFolders?.map(wf => wf.uri.fsPath) || [];
+
+  for (const rawInc of includeMatches) {
+    const resolvedPath = resolveLocalHeaderPath(rawInc, docUri, undefined, extraIncludeDirs ?? workspaceFolders);
+    if (!resolvedPath) continue;
+
+    const normalized = canonicalizePath(resolvedPath);
+    if (visited.has(normalized)) continue;
+    visited.add(normalized);
+
+    let headerText = '';
+    let headerDoc: vscode.TextDocument | undefined = undefined;
+    try {
+      headerDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(resolvedPath));
+      headerText = headerDoc.getText();
+    } catch {
+      try {
+        if (fs.existsSync(resolvedPath)) {
+          headerText = fs.readFileSync(resolvedPath, 'utf-8');
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    if (!headerText) continue;
+
+    const found = findStructDefinitionInText(headerText, structName);
+    if (found && found.parsed.fields.length > 0) {
+      const headerUri = vscode.Uri.file(resolvedPath);
+      const range = headerDoc
+        ? getRangeFromOffsets(headerDoc, headerText, found.startIndex, found.endIndex)
+        : new vscode.Range(
+            offsetToPosition(headerText, found.startIndex),
+            offsetToPosition(headerText, found.endIndex)
+          );
+      return {
+        parsed: found.parsed,
+        uri: headerUri,
+        range,
+        document: headerDoc
+      };
+    }
+
+    // Recurse into this header's includes
+    const subMatch = await searchIncludesForStruct(
+      headerText,
+      vscode.Uri.file(resolvedPath),
+      structName,
+      visited,
+      depth + 1,
+      maxDepth,
+      extraIncludeDirs
+    );
+    if (subMatch) {
+      return subMatch;
+    }
+  }
+
+  return null;
+}
+
+export interface ResolvedStructDefinition {
+  parsed: ParsedStruct;
+  documentUri: vscode.Uri;
+  range?: vscode.Range;
+  layout: StructLayout;
+  definitionDocument?: vscode.TextDocument;
+}
+
+/**
+ * Resolves the struct / class definition and memory layout across active document,
+ * definition provider (LSP), #include directives, and workspace symbols.
+ */
+export async function resolveStructDefinition(
+  document: vscode.TextDocument,
+  position?: vscode.Position,
+  structName?: string,
+  extraIncludeDirs?: string[]
+): Promise<ResolvedStructDefinition | null> {
+  const dataModel: DataModel = process.platform === 'win32' ? 'LLP64' : 'LP64';
+  const cleanName = structName ? structName.split('::').pop() || structName : undefined;
+
+  // 1. Current document at cursor/position
+  if (position) {
+    try {
+      const offset = document.offsetAt(position);
+      const atPos = extractStructDefinitionAtPosition(document.getText(), offset);
+      if (atPos && (!cleanName || atPos.parsed.name === cleanName) && atPos.parsed.fields.length > 0) {
+        const layout = NativeBridge.calculateStructLayout(atPos.parsed.name, atPos.parsed.fields, {
+          isPacked: atPos.parsed.isPacked,
+          maxPackAlignment: atPos.parsed.maxPackAlignment,
+          structAlignment: atPos.parsed.structAlignment,
+          dataModel
+        });
+        const range = getRangeFromOffsets(document, document.getText(), atPos.startIndex, atPos.endIndex);
+        return {
+          parsed: atPos.parsed,
+          documentUri: document.uri,
+          range,
+          layout,
+          definitionDocument: document
+        };
+      }
+    } catch {
+      // Continue to next steps
+    }
+  }
+
+  // 2. In current document by name
+  if (cleanName) {
+    try {
+      const inDoc = findStructDefinitionInText(document.getText(), cleanName);
+      if (inDoc && inDoc.parsed.fields.length > 0) {
+        const layout = NativeBridge.calculateStructLayout(inDoc.parsed.name, inDoc.parsed.fields, {
+          isPacked: inDoc.parsed.isPacked,
+          maxPackAlignment: inDoc.parsed.maxPackAlignment,
+          structAlignment: inDoc.parsed.structAlignment,
+          dataModel
+        });
+        const range = getRangeFromOffsets(document, document.getText(), inDoc.startIndex, inDoc.endIndex);
+        return {
+          parsed: inDoc.parsed,
+          documentUri: document.uri,
+          range,
+          layout,
+          definitionDocument: document
+        };
+      }
+    } catch {
+      // Continue to next steps
+    }
+  }
+
+  // 3. Via vscode.executeDefinitionProvider across definitions
+  if (position) {
+    try {
+      const defs = await vscode.commands.executeCommand<vscode.LocationLink[] | vscode.Location[]>(
+        'vscode.executeDefinitionProvider',
+        document.uri,
+        position
+      );
+      if (Array.isArray(defs) && defs.length > 0) {
+        for (const target of defs) {
+          const targetUri = 'targetUri' in target ? (target as vscode.LocationLink).targetUri : (target as vscode.Location).uri;
+          const targetRange = 'targetRange' in target ? (target as vscode.LocationLink).targetRange : (target as vscode.Location).range;
+          if (!targetUri) continue;
+
+          let defDoc: vscode.TextDocument | null = null;
+          if (targetUri.toString() === document.uri.toString()) {
+            defDoc = document;
+          } else {
+            try {
+              defDoc = await vscode.workspace.openTextDocument(targetUri);
+            } catch {
+              defDoc = null;
+            }
+          }
+
+          if (defDoc) {
+            const defText = defDoc.getText();
+            // Check at offset if targetRange exists
+            if (targetRange) {
+              const defOffset = defDoc.offsetAt(targetRange.start);
+              const atDef = extractStructDefinitionAtPosition(defText, defOffset);
+              if (atDef && (!cleanName || atDef.parsed.name === cleanName) && atDef.parsed.fields.length > 0) {
+                const layout = NativeBridge.calculateStructLayout(atDef.parsed.name, atDef.parsed.fields, {
+                  isPacked: atDef.parsed.isPacked,
+                  maxPackAlignment: atDef.parsed.maxPackAlignment,
+                  structAlignment: atDef.parsed.structAlignment,
+                  dataModel
+                });
+                const range = getRangeFromOffsets(defDoc, defText, atDef.startIndex, atDef.endIndex);
+                return {
+                  parsed: atDef.parsed,
+                  documentUri: defDoc.uri,
+                  range,
+                  layout,
+                  definitionDocument: defDoc
+                };
+              }
+            }
+
+            // Also check by name in defDoc
+            if (cleanName) {
+              const byName = findStructDefinitionInText(defText, cleanName);
+              if (byName && byName.parsed.fields.length > 0) {
+                const layout = NativeBridge.calculateStructLayout(byName.parsed.name, byName.parsed.fields, {
+                  isPacked: byName.parsed.isPacked,
+                  maxPackAlignment: byName.parsed.maxPackAlignment,
+                  structAlignment: byName.parsed.structAlignment,
+                  dataModel
+                });
+                const range = getRangeFromOffsets(defDoc, defText, byName.startIndex, byName.endIndex);
+                return {
+                  parsed: byName.parsed,
+                  documentUri: defDoc.uri,
+                  range,
+                  layout,
+                  definitionDocument: defDoc
+                };
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // Continue to next steps
+    }
+  }
+
+  // 4. Via #include directives in document (recursive/transitive)
+  if (cleanName) {
+    const visited = new Set<string>();
+    if (document.uri && document.uri.fsPath) {
+      visited.add(canonicalizePath(document.uri.fsPath));
+    }
+
+    const includeMatch = await searchIncludesForStruct(
+      document.getText(),
+      document.uri,
+      cleanName,
+      visited,
+      0,
+      3,
+      extraIncludeDirs
+    );
+
+    if (includeMatch) {
+      const layout = NativeBridge.calculateStructLayout(includeMatch.parsed.name, includeMatch.parsed.fields, {
+        isPacked: includeMatch.parsed.isPacked,
+        maxPackAlignment: includeMatch.parsed.maxPackAlignment,
+        structAlignment: includeMatch.parsed.structAlignment,
+        dataModel
+      });
+      return {
+        parsed: includeMatch.parsed,
+        documentUri: includeMatch.uri,
+        range: includeMatch.range,
+        layout,
+        definitionDocument: includeMatch.document
+      };
+    }
+  }
+
+  // 5. Workspace symbol search as final fallback
+  if (cleanName) {
+    try {
+      const symbols = await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
+        'vscode.executeWorkspaceSymbolProvider',
+        cleanName
+      );
+      if (Array.isArray(symbols) && symbols.length > 0) {
+        for (const sym of symbols) {
+          if (
+            (sym.kind === vscode.SymbolKind.Struct || sym.kind === vscode.SymbolKind.Class) &&
+            sym.name === cleanName &&
+            sym.location &&
+            sym.location.uri
+          ) {
+            try {
+              const symDoc = await vscode.workspace.openTextDocument(sym.location.uri);
+              if (symDoc) {
+                const symText = symDoc.getText();
+                const byName = findStructDefinitionInText(symText, cleanName);
+                if (byName && byName.parsed.fields.length > 0) {
+                  const layout = NativeBridge.calculateStructLayout(byName.parsed.name, byName.parsed.fields, {
+                    isPacked: byName.parsed.isPacked,
+                    maxPackAlignment: byName.parsed.maxPackAlignment,
+                    structAlignment: byName.parsed.structAlignment,
+                    dataModel
+                  });
+                  const range = getRangeFromOffsets(symDoc, symText, byName.startIndex, byName.endIndex);
+                  return {
+                    parsed: byName.parsed,
+                    documentUri: symDoc.uri,
+                    range,
+                    layout,
+                    definitionDocument: symDoc
+                  };
+                }
+              }
+            } catch {
+              // Continue checking other symbols
+            }
+          }
+        }
+      }
+    } catch {
+      // Ignore symbol search errors
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -540,35 +938,120 @@ export class MemoryLayoutInspector implements vscode.Disposable {
     this.outputChannel.dispose();
   }
 
-  public inspectCurrentStruct(editor?: vscode.TextEditor): StructLayout | null {
-    const activeEditor = editor || vscode.window.activeTextEditor;
-    if (!activeEditor) {
+  public async inspectCurrentStruct(
+    editorOrArgs?: vscode.TextEditor | unknown,
+    line?: number,
+    character?: number,
+    structName?: string
+  ): Promise<StructLayout | null> {
+    let targetUri: vscode.Uri | undefined;
+    let targetPosition: vscode.Position | undefined;
+    let targetStructName: string | undefined = structName;
+    let editor: vscode.TextEditor | undefined;
+
+    // 1. Check if passed a TextEditor instance
+    if (editorOrArgs && typeof editorOrArgs === 'object' && 'document' in (editorOrArgs as Record<string, unknown>)) {
+      editor = editorOrArgs as vscode.TextEditor;
+    } else if (Array.isArray(editorOrArgs) && editorOrArgs.length >= 3) {
+      // 2. Encoded array [uriStr, line, char, structName?]
+      const uriStr = editorOrArgs[0];
+      targetUri = typeof uriStr === 'string' ? vscode.Uri.parse(uriStr) : (uriStr instanceof vscode.Uri ? uriStr : undefined);
+      targetPosition = new vscode.Position(Number(editorOrArgs[1]), Number(editorOrArgs[2]));
+      if (editorOrArgs.length > 3 && editorOrArgs[3]) {
+        targetStructName = String(editorOrArgs[3]);
+      }
+    } else if (typeof editorOrArgs === 'string') {
+      // 3. URI string argument
+      targetUri = vscode.Uri.parse(editorOrArgs);
+      if (typeof line === 'number' && typeof character === 'number') {
+        targetPosition = new vscode.Position(line, character);
+      }
+    } else if (editorOrArgs && typeof editorOrArgs === 'object') {
+      // 4. Object argument { uri/documentUri, line/character/position, structName }
+      const obj = editorOrArgs as Record<string, any>;
+      const rawUri = obj.documentUri ?? obj.uri;
+      if (rawUri) {
+        targetUri = typeof rawUri === 'string' ? vscode.Uri.parse(rawUri) : (rawUri instanceof vscode.Uri ? rawUri : undefined);
+      }
+      if (obj.position instanceof vscode.Position) {
+        targetPosition = obj.position;
+      } else if (typeof obj.line === 'number' && typeof obj.character === 'number') {
+        targetPosition = new vscode.Position(obj.line, obj.character);
+      }
+      if (obj.structName && typeof obj.structName === 'string') {
+        targetStructName = obj.structName;
+      }
+    }
+
+    // Determine target document and editor
+    let doc: vscode.TextDocument | undefined = editor?.document;
+    if (targetUri && (!doc || doc.uri.toString() !== targetUri.toString())) {
+      try {
+        doc = await vscode.workspace.openTextDocument(targetUri);
+      } catch {
+        // Fall back to active editor
+      }
+    }
+
+    if (!doc) {
+      editor = vscode.window.activeTextEditor;
+      doc = editor?.document;
+    }
+
+    if (!doc) {
       vscode.window.showWarningMessage('C/C++ Pro: No active C/C++ editor.');
       return null;
     }
 
-    const doc = activeEditor.document;
-    const text = doc.getText();
-    const cursorOffset = doc.offsetAt(activeEditor.selection.active);
+    const pos = targetPosition || editor?.selection.active;
 
-    const parsed = extractStructAtPosition(text, cursorOffset);
-    if (!parsed) {
-      vscode.window.showInformationMessage('C/C++ Pro: Place cursor inside a struct or class to inspect memory layout.');
-      return null;
+    // Extract identifier at position if struct name not explicitly passed
+    if (!targetStructName && pos && doc) {
+      const wordRange = doc.getWordRangeAtPosition(pos);
+      if (wordRange) {
+        const word = doc.getText(wordRange).trim();
+        if (/^[a-zA-Z_]\w*$/.test(word)) {
+          targetStructName = word;
+        }
+      }
     }
 
-    const dataModel: DataModel = process.platform === 'win32' ? 'LLP64' : 'LP64';
-    const layout = NativeBridge.calculateStructLayout(parsed.name, parsed.fields, {
-      isPacked: parsed.isPacked,
-      maxPackAlignment: parsed.maxPackAlignment,
-      dataModel
-    });
-    const diagram = generateLayoutAsciiDiagram(layout);
+    // Resolve struct definition across current doc, definitions, headers, and workspace
+    const resolved = await resolveStructDefinition(doc, pos, targetStructName);
 
-    this.outputChannel.clear();
-    this.outputChannel.appendLine(diagram);
-    this.outputChannel.show(true);
+    if (resolved) {
+      // Navigate to definition file and reveal range
+      try {
+        const targetDoc = resolved.definitionDocument || await vscode.workspace.openTextDocument(resolved.documentUri);
+        const revealedEditor = await vscode.window.showTextDocument(targetDoc, {
+          preview: false,
+          selection: resolved.range
+        });
+        if (resolved.range && revealedEditor && typeof revealedEditor.revealRange === 'function') {
+          revealedEditor.revealRange(resolved.range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+        }
+      } catch {
+        // Continue showing diagram even if navigation throws in headless mode
+      }
 
-    return layout;
+      const diagram = generateLayoutAsciiDiagram(resolved.layout);
+      this.outputChannel.clear();
+      this.outputChannel.appendLine(diagram);
+      this.outputChannel.show(true);
+
+      return resolved.layout;
+    }
+
+    if (targetStructName) {
+      vscode.window.showWarningMessage(
+        `C/C++ Pro: Definition for '${targetStructName}' could not be found. Did you mean to create one?`
+      );
+    } else {
+      vscode.window.showInformationMessage(
+        'C/C++ Pro: Place cursor inside a struct or class to inspect memory layout.'
+      );
+    }
+
+    return null;
   }
 }

@@ -5,12 +5,13 @@ import {
   extractStructAtPosition,
   findStructByName,
   calculateStructLayout,
+  resolveStructDefinition,
   StructLayout,
   DataModel
 } from '../inspector/memory-layout-inspector';
 import { NativeBridge } from '../native/native-bridge';
-import { makeFindReferencesLink } from './command-links';
-export { makeFindReferencesLink } from './command-links';
+import { makeFindReferencesLink, makeInspectMemoryLayoutLink } from './command-links';
+export { makeFindReferencesLink, makeInspectMemoryLayoutLink } from './command-links';
 
 export interface ParameterInfo {
   name: string;
@@ -643,8 +644,9 @@ export class HoverTransformer {
 
         md.appendMarkdown('\n---\n');
         const findRefLink = makeFindReferencesLink(documentUri, position);
+        const inspectLink = makeInspectMemoryLayoutLink(documentUri, position, targetName);
         md.appendMarkdown(
-          `[Inspect Memory Layout](command:c-cpp-pro.inspectMemoryLayout) | ${findRefLink} | [Switch Header/Source](command:c-cpp-pro.switchSourceHeader)`
+          `${inspectLink} | ${findRefLink} | [Switch Header/Source](command:c-cpp-pro.switchSourceHeader)`
         );
         return new vscode.Hover(md, hover.range);
       }
@@ -938,70 +940,21 @@ export class HoverTransformer {
     const rawName = candidateType || hoveredWord || '';
     const cleanName = rawName.split('::').pop() || rawName;
 
+    // 1. Try comprehensive cross-file, include, and definition resolution
+    if (document) {
+      try {
+        const resolved = await resolveStructDefinition(document, position, cleanName);
+        if (resolved) {
+          return resolved.layout;
+        }
+      } catch {
+        // Fall back to local parsing
+      }
+    }
+
     let parsed = null;
 
-    // 1. Try cursor position in current document if available, ONLY if it matches the target struct
-    if (document && position) {
-      try {
-        const offset = document.offsetAt(position);
-        const atCursor = extractStructAtPosition(document.getText(), offset);
-        if (atCursor && (!cleanName || atCursor.name === cleanName)) {
-          parsed = atCursor;
-        }
-      } catch {
-        parsed = null;
-      }
-    }
-
-    // 2. Try finding struct by name in current document
-    if (!parsed && document && cleanName) {
-      try {
-        parsed = findStructByName(document.getText(), cleanName);
-      } catch {
-        parsed = null;
-      }
-    }
-
-    // 3. Try definition provider to locate definition document (e.g. header file)
-    if (!parsed && document && position) {
-      try {
-        const defs = await vscode.commands.executeCommand<vscode.LocationLink[] | vscode.Location[]>(
-          'vscode.executeDefinitionProvider',
-          document.uri,
-          position
-        );
-        if (Array.isArray(defs) && defs.length > 0) {
-          const target = defs[0];
-          const targetUri = 'targetUri' in target ? (target as vscode.LocationLink).targetUri : (target as vscode.Location).uri;
-          const targetRange = 'targetRange' in target ? (target as vscode.LocationLink).targetRange : (target as vscode.Location).range;
-          if (targetUri && targetRange) {
-            let defDoc: vscode.TextDocument | null = null;
-            if (targetUri.toString() === document.uri.toString()) {
-              defDoc = document;
-            } else {
-              try {
-                defDoc = await vscode.workspace.openTextDocument(targetUri);
-              } catch {
-                defDoc = null;
-              }
-            }
-            if (defDoc) {
-              const defOffset = defDoc.offsetAt(targetRange.start);
-              const atDef = extractStructAtPosition(defDoc.getText(), defOffset);
-              if (atDef && (!cleanName || atDef.name === cleanName)) {
-                parsed = atDef;
-              } else if (cleanName) {
-                parsed = findStructByName(defDoc.getText(), cleanName);
-              }
-            }
-          }
-        }
-      } catch {
-        // Ignore definition lookup failure
-      }
-    }
-
-    // 4. Try parsing directly from codeBlock if it contains a struct body with fields { ... }
+    // 2. Fallback: Try parsing directly from codeBlock if it contains a struct body with fields { ... }
     if (!parsed && codeBlock.includes('{') && codeBlock.includes('}')) {
       const openIdx = codeBlock.indexOf('{');
       const closeIdx = codeBlock.lastIndexOf('}');

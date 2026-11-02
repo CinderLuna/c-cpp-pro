@@ -1,5 +1,9 @@
 import './vscode-mock';
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import * as vscode from 'vscode';
 import {
   resolveTypeInfo,
   calculateStructLayout,
@@ -8,7 +12,9 @@ import {
   extractStructAtPosition,
   findMatchingBrace,
   parseFieldsFromBody,
-  findStructByName
+  findStructByName,
+  resolveStructDefinition,
+  MemoryLayoutInspector
 } from '../src/inspector/memory-layout-inspector';
 
 describe('Type & Memory Layout Inspector', () => {
@@ -317,6 +323,274 @@ int x = 42;
     it('should return null when struct name does not exist', () => {
       const code = `struct Other { int x; };`;
       assert.strictEqual(findStructByName(code, 'GridLength'), null);
+    });
+
+    it('should match structs and classes with final, inheritance, and attributes', () => {
+      const code = `
+        class [[nodiscard]] Widget final : public BaseWidget {
+          int width;
+          int height;
+        };
+      `;
+      const parsed = findStructByName(code, 'Widget');
+      assert.ok(parsed);
+      assert.strictEqual(parsed?.name, 'Widget');
+      assert.strictEqual(parsed?.fields.length, 2);
+    });
+
+    it('should match structs with alignas and templates', () => {
+      const code = `
+        template <typename T>
+        struct alignas(16) AlignedBuffer {
+          int size;
+          void* ptr;
+        };
+      `;
+      const parsed = findStructByName(code, 'AlignedBuffer');
+      assert.ok(parsed);
+      assert.strictEqual(parsed?.name, 'AlignedBuffer');
+      assert.strictEqual(parsed?.structAlignment, 16);
+      assert.strictEqual(parsed?.fields.length, 2);
+    });
+
+    it('should not match forward declarations without body', () => {
+      const code = `
+        class ForwardDeclared;
+        struct OtherStruct { int a; };
+      `;
+      assert.strictEqual(findStructByName(code, 'ForwardDeclared'), null);
+    });
+  });
+
+  describe('resolveStructDefinition and Navigation across files', () => {
+    let tempDir: string;
+
+    beforeEach(() => {
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-cpp-pro-layout-test-'));
+    });
+
+    afterEach(() => {
+      if (tempDir && fs.existsSync(tempDir)) {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should recursively resolve struct definition from included header in a non-definition source file', async () => {
+      const headerPath = path.join(tempDir, 'widget.h');
+      const headerContent = `
+#pragma once
+class Widget final {
+public:
+    int width;
+    int height;
+    void* handle;
+};
+`;
+      fs.writeFileSync(headerPath, headerContent, 'utf-8');
+
+      const srcPath = path.join(tempDir, 'main.cpp');
+      const srcContent = `
+#include "widget.h"
+
+int main() {
+    Widget w;
+    return 0;
+}
+`;
+      fs.writeFileSync(srcPath, srcContent, 'utf-8');
+
+      const srcDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(srcPath));
+      const widgetOffset = srcContent.indexOf('Widget w');
+      const pos = srcDoc.positionAt(widgetOffset + 2);
+
+      const resolved = await resolveStructDefinition(srcDoc, pos, 'Widget');
+      assert.ok(resolved, 'Should resolve Widget from widget.h');
+      assert.strictEqual(resolved?.parsed.name, 'Widget');
+      assert.strictEqual(resolved?.parsed.fields.length, 3);
+      assert.strictEqual(resolved?.layout.totalSize, 16);
+      assert.ok(resolved?.documentUri.fsPath.endsWith('widget.h'));
+    });
+
+    it('should resolve struct transitively through nested include headers', async () => {
+      const baseHeaderPath = path.join(tempDir, 'base_types.h');
+      fs.writeFileSync(
+        baseHeaderPath,
+        `
+#pragma once
+struct ColorRGBA {
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+    uint8_t a;
+};
+`,
+        'utf-8'
+      );
+
+      const midHeaderPath = path.join(tempDir, 'graphics.h');
+      fs.writeFileSync(
+        midHeaderPath,
+        `
+#pragma once
+#include "base_types.h"
+`,
+        'utf-8'
+      );
+
+      const srcPath = path.join(tempDir, 'app.cpp');
+      const srcContent = `
+#include "graphics.h"
+void render() {
+    ColorRGBA color;
+}
+`;
+      fs.writeFileSync(srcPath, srcContent, 'utf-8');
+
+      const srcDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(srcPath));
+      const colorOffset = srcContent.indexOf('ColorRGBA color');
+      const pos = srcDoc.positionAt(colorOffset + 3);
+
+      const resolved = await resolveStructDefinition(srcDoc, pos, 'ColorRGBA');
+      assert.ok(resolved, 'Should resolve ColorRGBA transitively from base_types.h');
+      assert.strictEqual(resolved?.parsed.name, 'ColorRGBA');
+      assert.strictEqual(resolved?.layout.totalSize, 4);
+      assert.ok(resolved?.documentUri.fsPath.endsWith('base_types.h'));
+    });
+
+    it('should navigate to definition and render diagram when inspectCurrentStruct is invoked', async () => {
+      const headerPath = path.join(tempDir, 'player.h');
+      fs.writeFileSync(
+        headerPath,
+        `
+struct Player {
+    int id;
+    float health;
+};
+`,
+        'utf-8'
+      );
+
+      const srcPath = path.join(tempDir, 'game.cpp');
+      const srcContent = `
+#include "player.h"
+Player p;
+`;
+      fs.writeFileSync(srcPath, srcContent, 'utf-8');
+
+      const srcDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(srcPath));
+      const playerOffset = srcContent.indexOf('Player p');
+      const pos = srcDoc.positionAt(playerOffset + 2);
+
+      const inspector = new MemoryLayoutInspector();
+      try {
+        const layout = await inspector.inspectCurrentStruct(
+          srcDoc.uri.toString(),
+          pos.line,
+          pos.character,
+          'Player'
+        );
+        assert.ok(layout);
+        assert.strictEqual(layout?.name, 'Player');
+        assert.strictEqual(layout?.totalSize, 8);
+
+        // Verify active text editor was navigated to player.h
+        const activeEditor = vscode.window.activeTextEditor;
+        assert.ok(activeEditor);
+        assert.ok(activeEditor?.document.fileName.endsWith('player.h'));
+      } finally {
+        inspector.dispose();
+      }
+    });
+
+    it('should show specific warning message when struct definition cannot be found', async () => {
+      const srcPath = path.join(tempDir, 'test_missing.cpp');
+      const srcContent = `
+void test() {
+    UnknownEntity e;
+}
+`;
+      fs.writeFileSync(srcPath, srcContent, 'utf-8');
+
+      const srcDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(srcPath));
+      const offset = srcContent.indexOf('UnknownEntity');
+      const pos = srcDoc.positionAt(offset + 2);
+
+      // Create editor for active doc
+      await vscode.window.showTextDocument(srcDoc, { selection: new vscode.Range(pos, pos) });
+
+      const inspector = new MemoryLayoutInspector();
+      try {
+        const layout = await inspector.inspectCurrentStruct();
+        assert.strictEqual(layout, null);
+        assert.strictEqual(
+          (vscode.window as any).lastWarningMessage,
+          "C/C++ Pro: Definition for 'UnknownEntity' could not be found. Did you mean to create one?"
+        );
+      } finally {
+        inspector.dispose();
+      }
+    });
+
+    it('should show generic placement message when cursor is on whitespace or punctuation', async () => {
+      const srcPath = path.join(tempDir, 'test_empty.cpp');
+      const srcContent = `
+// Just empty lines and semicolons
+;
+;
+`;
+      fs.writeFileSync(srcPath, srcContent, 'utf-8');
+
+      const srcDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(srcPath));
+      const pos = new vscode.Position(2, 0);
+
+      await vscode.window.showTextDocument(srcDoc, { selection: new vscode.Range(pos, pos) });
+
+      const inspector = new MemoryLayoutInspector();
+      try {
+        const layout = await inspector.inspectCurrentStruct();
+        assert.strictEqual(layout, null);
+        assert.strictEqual(
+          (vscode.window as any).lastInformationMessage,
+          'C/C++ Pro: Place cursor inside a struct or class to inspect memory layout.'
+        );
+      } finally {
+        inspector.dispose();
+      }
+    });
+
+    it('should accept array encoded arguments from markdown command links', async () => {
+      const headerPath = path.join(tempDir, 'matrix.h');
+      fs.writeFileSync(
+        headerPath,
+        `
+struct Matrix4x4 {
+    float m[16];
+};
+`,
+        'utf-8'
+      );
+
+      const srcPath = path.join(tempDir, 'render.cpp');
+      const srcContent = `
+#include "matrix.h"
+Matrix4x4 mat;
+`;
+      fs.writeFileSync(srcPath, srcContent, 'utf-8');
+
+      const srcDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(srcPath));
+      const offset = srcContent.indexOf('Matrix4x4 mat');
+      const pos = srcDoc.positionAt(offset);
+
+      const inspector = new MemoryLayoutInspector();
+      try {
+        const args = [srcDoc.uri.toString(), pos.line, pos.character, 'Matrix4x4'];
+        const layout = await inspector.inspectCurrentStruct(args);
+        assert.ok(layout);
+        assert.strictEqual(layout?.name, 'Matrix4x4');
+        assert.strictEqual(layout?.totalSize, 64);
+      } finally {
+        inspector.dispose();
+      }
     });
   });
 });

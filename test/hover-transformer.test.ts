@@ -1,5 +1,8 @@
 import './vscode-mock';
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   inferParameterSemantics,
@@ -361,6 +364,51 @@ public:
       assert.ok(!content.includes('**`id`**'));
       assert.ok(!content.includes('**`bounds`**'));
       assert.ok(!content.includes('**`opacity`**'));
+    });
+
+    it('should resolve struct layout and parameterize inspect link when hovering in a non-definition file', async () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-cpp-pro-hover-cross-'));
+      try {
+        const headerPath = path.join(tempDir, 'gadget.h');
+        fs.writeFileSync(
+          headerPath,
+          `
+#pragma once
+struct Gadget {
+    int id;
+    double weight;
+};
+`,
+          'utf-8'
+        );
+
+        const srcPath = path.join(tempDir, 'consumer.cpp');
+        const srcContent = `
+#include "gadget.h"
+void process(const Gadget& g) {}
+`;
+        fs.writeFileSync(srcPath, srcContent, 'utf-8');
+
+        const srcDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(srcPath));
+        const gadgetOffset = srcContent.indexOf('Gadget');
+        const pos = srcDoc.positionAt(gadgetOffset);
+
+        const rawCode = `\`\`\`cpp\nstruct Gadget\n\`\`\``;
+        const inputHover = new vscode.Hover([rawCode], new vscode.Range(pos, pos));
+        const transformed = await HoverTransformer.transformAsync(inputHover, 'Gadget', srcDoc, pos);
+
+        assert.ok(transformed);
+        const content = (transformed.contents[0] as vscode.MarkdownString).value;
+        assert.ok(content.includes('### `struct Gadget`'));
+        assert.ok(content.includes('**Size**: `16 bytes`'));
+        assert.ok(content.includes('**`id`**'));
+        assert.ok(content.includes('**`weight`**'));
+        assert.ok(content.includes('[Inspect Memory Layout](command:c-cpp-pro.inspectMemoryLayout?'));
+      } finally {
+        if (fs.existsSync(tempDir)) {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+      }
     });
   });
 });
