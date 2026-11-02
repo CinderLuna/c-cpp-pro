@@ -274,7 +274,13 @@ export class Uri {
       clean = decodeURIComponent(uriStr);
     } catch {}
     if (clean.startsWith('file://')) {
-      return new Uri('file', clean.substring(7).replace(/^\/+/, ''));
+      let raw = clean.substring(7);
+      if (/^\/[a-zA-Z]:/.test(raw)) {
+        raw = raw.substring(1);
+      } else if (!raw.startsWith('/') && process.platform !== 'win32') {
+        raw = '/' + raw;
+      }
+      return new Uri('file', raw);
     }
     return new Uri('file', clean);
   }
@@ -285,7 +291,11 @@ export class Uri {
   constructor(public readonly scheme: string, public readonly fsPath: string) {}
   toString(): string {
     const p = this.fsPath.replace(/\\/g, '/');
-    return p.startsWith('file://') ? p : `${this.scheme}:///${p.replace(/^\/+/, '')}`;
+    if (p.startsWith('file://')) return p;
+    if (process.platform === 'win32' || /^[a-zA-Z]:/.test(p) || /^\/[a-zA-Z]:/.test(p)) {
+      return `${this.scheme}:///${p.replace(/^\/+/, '')}`;
+    }
+    return `${this.scheme}://${p.startsWith('/') ? p : '/' + p}`;
   }
 }
 
@@ -630,8 +640,18 @@ export const mockVscode: any = {
   },
   workspace: {
     openTextDocument: async (uriOrPath: any) => {
-      const fsPath = typeof uriOrPath === 'string' ? uriOrPath : uriOrPath?.fsPath ?? String(uriOrPath);
-      const uri = typeof uriOrPath === 'string' ? Uri.file(uriOrPath) : uriOrPath;
+      let fsPath = typeof uriOrPath === 'string' ? uriOrPath : uriOrPath?.fsPath ?? String(uriOrPath);
+      let uri: Uri;
+      if (typeof uriOrPath === 'string') {
+        if (uriOrPath.startsWith('file://')) {
+          uri = Uri.parse(uriOrPath);
+          fsPath = uri.fsPath;
+        } else {
+          uri = Uri.file(uriOrPath);
+        }
+      } else {
+        uri = uriOrPath;
+      }
       let content = '';
       try {
         const fsModule = require('fs');
