@@ -219,7 +219,12 @@ export function calculateStructLayout(
         : bInfo.size - aInfo.size;
     });
 
-    const optLayout = calculateStructLayout(structName, sortedFields, { isPacked: false, skipOptimization: true, dataModel });
+    const optLayout = calculateStructLayout(structName, sortedFields, {
+      isPacked: false,
+      skipOptimization: true,
+      dataModel,
+      structAlignment: options.structAlignment
+    });
     optimizedSize = optLayout.totalSize;
 
     if (optimizedSize < totalSize) {
@@ -508,7 +513,7 @@ export function extractStructDefinitionAtPosition(
   text: string,
   cursorOffset: number
 ): StructDefinitionLocation | null {
-  const declRegex = /(?:template\s*<[^{;]*>\s*)?(?:struct|class|union)\b(?:\s+(?:alignas\s*\([^)]*\)|\[\[[^\]]*\]\]))*\s+([a-zA-Z_]\w*)\b[^{;]*\{/g;
+  const declRegex = /(?:template\s*<[^{;]*>\s*)?(?<!\benum\s+)(?:struct|class|union)\b(?:\s+(?:alignas\s*\([^)]*\)|\[\[[^\]]*\]\]))*\s+([a-zA-Z_]\w*)\b(?:\s+final)?(?:\s*\[\[[^\]]*\]\])*(?:\s*:\s*[^{;()=]+)?\s*\{/g;
   let match: RegExpExecArray | null;
 
   while ((match = declRegex.exec(text)) !== null) {
@@ -548,7 +553,7 @@ export function findStructDefinitionInText(
 ): StructDefinitionLocation | null {
   const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const declRegex = new RegExp(
-    `(?:template\\s*<[^{;]*>\\s*)?(?:struct|class|union)\\b(?:\\s+(?:alignas\\s*\\([^)]*\\)|\\[\\[[^\\]]*\\]\\]))*\\s+${escapedName}\\b[^{;]*\\{`,
+    `(?:template\\s*<[^{;]*>\\s*)?(?<!\\benum\\s+)(?:struct|class|union)\\b(?:\\s+(?:alignas\\s*\\([^)]*\\)|\\[\\[[^\\]]*\\]\\]))*\\s+${escapedName}\\b(?:\\s+final)?(?:\\s*\\[\\[[^\\]]*\\]\\])*(?:\\s*:\\s*[^{;()=]+)?\\s*\\{`,
     'g'
   );
   let match: RegExpExecArray | null;
@@ -1009,11 +1014,18 @@ export class MemoryLayoutInspector implements vscode.Disposable {
 
     // Extract identifier at position if struct name not explicitly passed
     if (!targetStructName && pos && doc) {
-      const wordRange = doc.getWordRangeAtPosition(pos);
-      if (wordRange) {
-        const word = doc.getText(wordRange).trim();
-        if (/^[a-zA-Z_]\w*$/.test(word)) {
-          targetStructName = word;
+      // Check if cursor is already located inside an enclosing struct/class/union definition
+      const offset = doc.offsetAt(pos);
+      const enclosing = extractStructDefinitionAtPosition(doc.getText(), offset);
+      if (enclosing && enclosing.parsed.fields.length > 0) {
+        targetStructName = enclosing.parsed.name;
+      } else {
+        const wordRange = doc.getWordRangeAtPosition(pos);
+        if (wordRange) {
+          const word = doc.getText(wordRange).trim();
+          if (/^[a-zA-Z_]\w*$/.test(word)) {
+            targetStructName = word;
+          }
         }
       }
     }

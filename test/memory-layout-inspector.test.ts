@@ -360,6 +360,36 @@ int x = 42;
       `;
       assert.strictEqual(findStructByName(code, 'ForwardDeclared'), null);
     });
+
+    it('should not detect functions returning structs, list-initialized variables, or enum classes as struct definitions', () => {
+      const code = `
+        struct Foo get_foo() {
+            int x = 10;
+            return Foo{x};
+        }
+        enum class Color { Red, Green, Blue };
+        struct Point p = { 1, 2 };
+        struct Point p2{ 1, 2 };
+      `;
+      assert.strictEqual(findStructByName(code, 'Foo'), null);
+      assert.strictEqual(findStructByName(code, 'Color'), null);
+      assert.strictEqual(findStructByName(code, 'Point'), null);
+    });
+
+    it('should calculate aligned struct layout with structAlignment', () => {
+      const fields = [
+        { type: 'int', name: 'x' },
+        { type: 'int', name: 'y' }
+      ];
+      // 8 bytes of fields with alignas(16) -> totalSize must be padded to 16 bytes
+      const layout = calculateStructLayout('AlignedVec', fields, {
+        isPacked: false,
+        structAlignment: 16
+      });
+      assert.strictEqual(layout.alignment, 16);
+      assert.strictEqual(layout.totalSize, 16);
+      assert.strictEqual(layout.paddingBytes, 8);
+    });
   });
 
   describe('resolveStructDefinition and Navigation across files', () => {
@@ -370,6 +400,9 @@ int x = 42;
     });
 
     afterEach(() => {
+      (vscode.window as any).activeTextEditor = undefined;
+      (vscode.window as any).lastWarningMessage = undefined;
+      (vscode.window as any).lastInformationMessage = undefined;
       if (tempDir && fs.existsSync(tempDir)) {
         fs.rmSync(tempDir, { recursive: true, force: true });
       }
@@ -497,7 +530,8 @@ Player p;
         const activeEditor = vscode.window.activeTextEditor;
         assert.ok(activeEditor);
         assert.ok(activeEditor?.document.fileName.endsWith('player.h'));
-        assert.ok(activeEditor?.selection.start.line !== undefined);
+        assert.strictEqual(activeEditor?.selection.start.line, 1);
+        assert.ok((activeEditor as unknown as Record<string, unknown>).lastRevealedRange);
       } finally {
         inspector.dispose();
       }
@@ -589,6 +623,66 @@ Matrix4x4 mat;
         assert.ok(layout);
         assert.strictEqual(layout?.name, 'Matrix4x4');
         assert.strictEqual(layout?.totalSize, 64);
+      } finally {
+        inspector.dispose();
+      }
+    });
+
+    it('should support object argument with documentUri, position, and structName', async () => {
+      const headerPath = path.join(tempDir, 'entity.h');
+      fs.writeFileSync(
+        headerPath,
+        `#pragma once\nstruct Entity {\n    int id;\n    float speed;\n};\n`,
+        'utf-8'
+      );
+
+      const srcPath = path.join(tempDir, 'entity_test.cpp');
+      fs.writeFileSync(
+        srcPath,
+        `#include "entity.h"\nvoid run() {\n    Entity e;\n}\n`,
+        'utf-8'
+      );
+
+      const srcDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(srcPath));
+      const entityOffset = srcDoc.getText().indexOf('Entity e');
+      const pos = srcDoc.positionAt(entityOffset);
+
+      const inspector = new MemoryLayoutInspector();
+      try {
+        const layout = await inspector.inspectCurrentStruct({
+          documentUri: srcDoc.uri,
+          position: pos,
+          structName: 'Entity'
+        });
+        assert.ok(layout);
+        assert.strictEqual(layout?.name, 'Entity');
+        assert.strictEqual(layout?.totalSize, 8);
+      } finally {
+        inspector.dispose();
+      }
+    });
+
+    it('should resolve enclosing struct when cursor is placed on a member field', async () => {
+      const headerPath = path.join(tempDir, 'player_model.h');
+      const content = `struct PlayerModel {\n    int health;\n    int armor;\n};\n`;
+      fs.writeFileSync(headerPath, content, 'utf-8');
+
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(headerPath));
+      const armorOffset = content.indexOf('armor');
+      const pos = doc.positionAt(armorOffset);
+
+      const fakeEditor = {
+        document: doc,
+        selection: new vscode.Selection(pos, pos),
+        revealRange: (_range: unknown) => {}
+      } as unknown as vscode.TextEditor;
+
+      const inspector = new MemoryLayoutInspector();
+      try {
+        const layout = await inspector.inspectCurrentStruct(fakeEditor);
+        assert.ok(layout);
+        assert.strictEqual(layout?.name, 'PlayerModel');
+        assert.strictEqual(layout?.totalSize, 8);
       } finally {
         inspector.dispose();
       }

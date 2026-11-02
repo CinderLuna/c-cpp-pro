@@ -645,7 +645,8 @@ export class HoverTransformer {
 
         md.appendMarkdown('\n---\n');
         const findRefLink = makeFindReferencesLink(documentUri, position);
-        const inspectLink = makeInspectMemoryLayoutLink(documentUri, position, targetName);
+        const structTarget = layout?.name || targetName;
+        const inspectLink = makeInspectMemoryLayoutLink(documentUri, position, structTarget);
         md.appendMarkdown(
           `${inspectLink} | ${findRefLink} | [Switch Header/Source](command:c-cpp-pro.switchSourceHeader)`
         );
@@ -892,9 +893,13 @@ export class HoverTransformer {
       if (declMatch) {
         candidate = declMatch[1];
       } else {
-        const varMatch = cleanCode.match(/^([\w:*&<>]+(?:\s+[\w:*&<>]+)*)\s+([a-zA-Z_]\w*)/);
+        const declLine = cleanCode.split(/[={;\n]/)[0].trim();
+        const varMatch = declLine.match(/^([\w:*&<>\s]+?)\s*([a-zA-Z_]\w*)$/);
         if (varMatch) {
-          candidate = varMatch[1].replace(/[*&]+$/, '').trim();
+          candidate = varMatch[1]
+            .replace(/^(?:const|volatile|constexpr|mutable)\s+/, '')
+            .replace(/[*&\s]+$/, '')
+            .trim();
         } else {
           const words = cleanCode.trim().split(/[\s<({]/);
           if (words[0]) {

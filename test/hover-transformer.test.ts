@@ -410,5 +410,55 @@ void process(const Gadget& g) {}
         }
       }
     });
+
+    it('should strip CV-qualifiers on variable hovers and parameterize inspect link with struct name instead of variable name', async () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c-cpp-pro-hover-cv-'));
+      try {
+        const headerPath = path.join(tempDir, 'gadget.h');
+        fs.writeFileSync(
+          headerPath,
+          `
+#pragma once
+struct Gadget {
+    int id;
+    double weight;
+};
+`,
+          'utf-8'
+        );
+
+        const srcPath = path.join(tempDir, 'consumer.cpp');
+        const srcContent = `
+#include "gadget.h"
+void process(const Gadget& g) {}
+`;
+        fs.writeFileSync(srcPath, srcContent, 'utf-8');
+
+        const srcDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(srcPath));
+        const varOffset = srcContent.indexOf('g)');
+        const pos = srcDoc.positionAt(varOffset);
+
+        // Clangd provides declaration of the variable: const Gadget &g
+        const rawCode = `\`\`\`cpp\nconst Gadget &g\n\`\`\``;
+        const inputHover = new vscode.Hover([rawCode], new vscode.Range(pos, pos));
+        const transformed = await HoverTransformer.transformAsync(inputHover, 'g', srcDoc, pos);
+
+        assert.ok(transformed);
+        const content = (transformed.contents[0] as vscode.MarkdownString).value;
+        assert.ok(content.includes('**Type Layout**: `struct Gadget`'));
+        assert.ok(content.includes('**Size**: `16 bytes`'));
+        // Verify inspect link contains Gadget, not g
+        assert.ok(content.includes('command:c-cpp-pro.inspectMemoryLayout?'));
+        const inspectLinkMatch = content.match(/\[Inspect Memory Layout\]\(command:c-cpp-pro\.inspectMemoryLayout\?([^)]+)\)/);
+        assert.ok(inspectLinkMatch);
+        const decodedArgs = decodeURIComponent(inspectLinkMatch[1]);
+        assert.ok(decodedArgs.includes('"Gadget"'), `Expected args to include "Gadget" but got: ${decodedArgs}`);
+        assert.ok(!decodedArgs.includes('"g"'), `Expected args not to include "g" as struct name: ${decodedArgs}`);
+      } finally {
+        if (fs.existsSync(tempDir)) {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+      }
+    });
   });
 });

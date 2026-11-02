@@ -10,7 +10,7 @@ import { BatchDispatcher } from '../telemetry/batch-dispatcher';
 import { SolutionManager } from '../solution/solution-manager';
 import { ProfileManager } from '../config/profile-manager';
 import { CMakeManager } from '../cmake/cmake-manager';
-import { MemoryLayoutInspector } from '../inspector/memory-layout-inspector';
+import { MemoryLayoutInspector, StructLayout } from '../inspector/memory-layout-inspector';
 import { IncludeVisualizerManager } from '../analysis/include-visualizer';
 import { CppTestController } from '../testing/test-controller';
 import { MacroEvaluatorManager } from '../intelligence/macro-evaluator';
@@ -92,7 +92,7 @@ export function registerAllCommands(ctx: CommandRegistryContext): vscode.Disposa
     }),
     vscode.commands.registerCommand(
       'c-cpp-pro.inspectMemoryLayout',
-      async (uriOrArgs?: unknown, line?: number, character?: number, structName?: string) => {
+      async (uriOrArgs?: unknown, line?: number, character?: number, structName?: string): Promise<StructLayout | null> => {
         return await memoryLayoutInspector.inspectCurrentStruct(uriOrArgs, line, character, structName);
       }
     ),

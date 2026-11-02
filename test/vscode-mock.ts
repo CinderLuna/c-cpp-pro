@@ -656,7 +656,7 @@ export const mockVscode: any = {
       try {
         const fsModule = require('fs');
         if (fsPath && fsModule.existsSync(fsPath) && !fsModule.statSync(fsPath).isDirectory()) {
-          content = fsModule.readFileSync(fsPath, 'utf-8');
+          content = fsModule.readFileSync(fsPath, 'utf-8').replace(/\r\n/g, '\n');
         }
       } catch {
         content = '';
