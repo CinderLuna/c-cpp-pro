@@ -1250,7 +1250,7 @@ export function getCachedWorkspaceSdkIncludes(wsRoot: string): string[] {
   if (cached && (now - cached.timestamp) < SDK_INCLUDE_CACHE_TTL_MS) {
     return cached.paths;
   }
-  const paths = ExternalSdkDetector.getWorkspaceIncludePaths(wsRoot);
+  const paths = ExternalSdkDetector.getWorkspaceIncludePaths(wsRoot, { workspaceRoot: wsRoot });
   workspaceSdkIncludeCache.set(canon, { timestamp: now, paths });
   return paths;
 }

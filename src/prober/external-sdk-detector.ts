@@ -14,6 +14,228 @@ export interface ExternalSdkDetectorOptions {
   env?: Record<string, string | undefined>;
   allowFsScan?: boolean;
   requireWorkspaceMatch?: boolean;
+  workspaceRoot?: string;
+  preferredCompiler?: 'mingw' | 'gcc' | 'msvc' | 'clang' | string;
+  preferredToolchain?: string;
+  preferredArch?: 'x64' | 'x86' | 'arm64' | string;
+  targetPlatform?: 'desktop' | 'android' | 'wasm' | 'ios' | string;
+  qtInstallDir?: string;
+}
+
+/**
+ * Detects preferred C/C++ compiler toolchain ('mingw', 'msvc', or 'clang') from options,
+ * environment variables, workspace build configuration files, or system PATH.
+ */
+export function detectCompilerPreference(
+  options: ExternalSdkDetectorOptions = {}
+): 'mingw' | 'msvc' | 'clang' | undefined {
+  if (options.preferredCompiler) {
+    const norm = options.preferredCompiler.toLowerCase();
+    if (norm.includes('gcc') || norm.includes('mingw')) return 'mingw';
+    if (norm.includes('msvc') || norm.includes('cl')) return 'msvc';
+    if (norm.includes('clang') || norm.includes('llvm')) return 'clang';
+  }
+
+  const env = options.env ?? process.env;
+
+  // 1. Check explicit Qt kit environment variables
+  const envToolchain = (env.QT_TOOLCHAIN || env.QT_KIT || '').toLowerCase();
+  if (envToolchain.includes('mingw') || envToolchain.includes('gcc')) return 'mingw';
+  if (envToolchain.includes('msvc') || envToolchain.includes('cl')) return 'msvc';
+  if (envToolchain.includes('clang') || envToolchain.includes('llvm')) return 'clang';
+
+  // 2. Check MSYSTEM or MinGW-specific environment variables
+  if (env.MSYSTEM || env.MINGW_PREFIX || env.MINGW_CHOST) return 'mingw';
+
+  // 3. Check Visual Studio / MSVC developer environment variables
+  if (env.VCINSTALLDIR || env.VSINSTALLDIR || env.VisualStudioVersion) return 'msvc';
+
+  // 4. Check CC and CXX environment variables
+  const cxx = (env.CXX || env.CC || '').toLowerCase();
+  if (cxx.includes('g++') || cxx.includes('gcc') || cxx.includes('mingw')) return 'mingw';
+  if (/(?:^|[\\/])cl(?:\.exe)?$/i.test(cxx)) return 'msvc';
+  if (cxx.includes('clang')) return 'clang';
+
+  // 5. Inspect workspace build files if workspaceRoot is available
+  const wsRoot = options.workspaceRoot;
+  if (wsRoot) {
+    try {
+      // CMakeCache.txt
+      const cmakeCacheCandidates = [
+        path.join(wsRoot, 'CMakeCache.txt'),
+        path.join(wsRoot, 'build', 'CMakeCache.txt'),
+        path.join(wsRoot, 'out', 'CMakeCache.txt'),
+        path.join(wsRoot, 'build', 'Debug', 'CMakeCache.txt'),
+        path.join(wsRoot, 'build', 'Release', 'CMakeCache.txt')
+      ];
+      for (const cacheFile of cmakeCacheCandidates) {
+        if (fs.existsSync(cacheFile)) {
+          const cacheContent = fs.readFileSync(cacheFile, 'utf8');
+          if (
+            /CMAKE_CXX_COMPILER:FILEPATH=.*(?:g\+\+|gcc|mingw)/i.test(cacheContent) ||
+            /CMAKE_GENERATOR:INTERNAL=.*MinGW/i.test(cacheContent)
+          ) {
+            return 'mingw';
+          }
+          if (
+            /CMAKE_CXX_COMPILER:FILEPATH=.*(?:cl(?:\.exe)?)/i.test(cacheContent) ||
+            /CMAKE_GENERATOR:INTERNAL=.*Visual Studio/i.test(cacheContent)
+          ) {
+            return 'msvc';
+          }
+          if (/CMAKE_CXX_COMPILER:FILEPATH=.*clang/i.test(cacheContent)) {
+            return 'clang';
+          }
+        }
+      }
+
+      // Visual Studio solutions
+      const rootFiles = fs.readdirSync(wsRoot);
+      if (rootFiles.some((f) => f.endsWith('.sln') || f.endsWith('.slnx') || f.endsWith('.vcxproj'))) {
+        return 'msvc';
+      }
+
+      // Makefile on Windows without solution files strongly indicates MinGW/GCC
+      if (process.platform === 'win32' && rootFiles.some((f) => /^makefile$/i.test(f) || /^gnumakefile$/i.test(f))) {
+        return 'mingw';
+      }
+
+      // compile_commands.json
+      const compDbCandidates = [
+        path.join(wsRoot, 'compile_commands.json'),
+        path.join(wsRoot, 'build', 'compile_commands.json')
+      ];
+      for (const compDb of compDbCandidates) {
+        if (fs.existsSync(compDb)) {
+          const firstChunk = fs.readFileSync(compDb, { encoding: 'utf8', flag: 'r' }).slice(0, 4096);
+          if (
+            firstChunk.includes('g++') ||
+            firstChunk.includes('gcc') ||
+            firstChunk.includes('--driver-mode=g++') ||
+            firstChunk.includes('mingw')
+          ) {
+            return 'mingw';
+          }
+          if (firstChunk.includes('cl.exe') || firstChunk.includes('--driver-mode=cl')) {
+            return 'msvc';
+          }
+          if (firstChunk.includes('clang')) {
+            return 'clang';
+          }
+        }
+      }
+    } catch {
+      // Ignore filesystem inspection errors
+    }
+  }
+
+  // 6. Inspect system PATH for toolchains
+  const pathEnv = (env.PATH || env.Path || '').toLowerCase();
+  const hasMinGwOnPath = pathEnv.includes('mingw') || pathEnv.includes('msys64');
+  const hasMsvcOnPath = pathEnv.includes('vc\\tools\\msvc') || pathEnv.includes('microsoft visual studio');
+
+  if (hasMinGwOnPath && !hasMsvcOnPath) return 'mingw';
+  if (hasMsvcOnPath && !hasMinGwOnPath) return 'msvc';
+
+  return undefined;
+}
+
+/**
+ * Computes a suitability score for a Qt toolchain kit directory name.
+ * Heavily penalizes cross-compilation / mobile / web toolchains (android, wasm, ios, qnx)
+ * during desktop development to ensure desktop kits (mingw, msvc, gcc, clang) are preferred.
+ */
+export function scoreQtToolchain(
+  tcName: string,
+  options: ExternalSdkDetectorOptions = {}
+): number {
+  const lower = tcName.toLowerCase();
+
+  // 1. Cross-compilation / mobile / embedded target detection
+  const isCrossTarget = /^(?:android|wasm|ios|qnx|integrity|winrt)/i.test(lower);
+  const targetPlatform = options.targetPlatform?.toLowerCase();
+  const wantCross = Boolean(
+    targetPlatform &&
+    targetPlatform !== 'desktop' &&
+    lower.startsWith(targetPlatform)
+  );
+
+  if (isCrossTarget && !wantCross) {
+    // Severe penalty: mobile/embedded cross-compilation toolchains should never be selected for desktop projects
+    return -100_000;
+  }
+  if (wantCross) {
+    return 50_000;
+  }
+
+  // 2. Explicit toolchain match
+  const env = options.env ?? process.env;
+  const explicitTc = (options.preferredToolchain || env.QT_TOOLCHAIN || env.QT_KIT || '').toLowerCase();
+  if (explicitTc && lower.includes(explicitTc)) {
+    return 80_000;
+  }
+
+  let score = 10_000; // Base score for host desktop toolchains
+
+  // 3. Compiler preference matching
+  const prefCompiler = detectCompilerPreference(options);
+  if (prefCompiler === 'mingw') {
+    if (lower.includes('mingw')) score += 40_000;
+    else if (lower.includes('gcc')) score += 30_000;
+    else if (lower.includes('clang') || lower.includes('llvm')) score += 10_000;
+    else if (lower.includes('msvc')) score += 2_000;
+  } else if (prefCompiler === 'msvc') {
+    if (lower.includes('msvc')) score += 40_000;
+    else if (lower.includes('clang') || lower.includes('llvm')) score += 10_000;
+    else if (lower.includes('mingw')) score += 2_000;
+  } else if (prefCompiler === 'clang') {
+    if (lower.includes('clang') || lower.includes('llvm')) score += 40_000;
+    else if (lower.includes('mingw')) score += 10_000;
+    else if (lower.includes('msvc')) score += 10_000;
+  } else {
+    // Default desktop priority by operating system
+    if (process.platform === 'win32') {
+      if (lower.includes('mingw')) score += 20_000;
+      if (lower.includes('msvc')) score += 20_000;
+      if (lower.includes('clang') || lower.includes('llvm')) score += 15_000;
+    } else if (process.platform === 'linux') {
+      if (lower.includes('gcc')) score += 20_000;
+      if (lower.includes('clang')) score += 15_000;
+    } else if (process.platform === 'darwin') {
+      if (lower.includes('macos') || lower.includes('clang')) score += 20_000;
+    }
+  }
+
+  // 4. Architecture preference matching
+  const prefArch = options.preferredArch?.toLowerCase() || process.arch;
+  if (prefArch === 'x64') {
+    if (lower.includes('64') || lower.includes('x86_64') || lower.includes('amd64')) {
+      score += 5_000;
+    }
+    if ((lower.includes('32') || lower.includes('x86')) && !lower.includes('64')) {
+      score -= 3_000;
+    }
+  } else if (prefArch === 'arm64') {
+    if (lower.includes('arm64')) {
+      score += 5_000;
+    }
+  } else if (prefArch === 'ia32' || prefArch === 'x86') {
+    if (lower.includes('32') || lower.includes('x86')) {
+      score += 5_000;
+    }
+  }
+
+  // 5. Toolchain recency / version ties
+  if (lower.includes('msvc2022')) score += 500;
+  else if (lower.includes('msvc2019')) score += 400;
+  else if (lower.includes('msvc2017')) score += 300;
+  else if (lower.includes('msvc2015')) score += 200;
+
+  if (lower.includes('mingw13')) score += 500;
+  else if (lower.includes('mingw11')) score += 400;
+  else if (lower.includes('mingw8')) score += 300;
+
+  return score;
 }
 
 /**
@@ -592,7 +814,9 @@ export class ExternalSdkDetector {
     if (!allowFsScan) return null;
 
     // 2. Scan standard installation folders
+    const customBase = options.qtInstallDir || env.QT_BASE_DIR;
     const baseCandidates = [
+      ...(customBase ? [customBase] : []),
       'C:\\Qt',
       'D:\\Qt',
       'F:\\Apps\\Qt',
@@ -635,40 +859,88 @@ export class ExternalSdkDetector {
           };
         }
 
-        // Base is a Qt installation directory with version folders
+        // Base is a Qt installation directory with version folders (e.g. C:\Qt\6.8.0, C:\Qt\6.5.3)
         const entries = fs.readdirSync(base, { withFileTypes: true });
         const versionDirs = entries
           .filter((e) => e.isDirectory() && /^\d+(\.\d+)+$/.test(e.name))
           .map((e) => e.name)
           .sort(compareSemverDesc);
 
+        interface QtCandidate {
+          version: string;
+          toolchain: string;
+          rootPath: string;
+          includePaths: string[];
+          libraryPaths?: string[];
+          isDesktop: boolean;
+          score: number;
+        }
+
+        const candidates: QtCandidate[] = [];
+
         for (const vDir of versionDirs) {
           const vPath = path.join(base, vDir);
-          const toolchains = fs.readdirSync(vPath, { withFileTypes: true });
-          const preferredTc = toolchains
-            .filter((t) => t.isDirectory())
-            .map((t) => t.name)
-            .sort((a, b) => {
-              if (a.includes('msvc') && !b.includes('msvc')) return -1;
-              if (!a.includes('msvc') && b.includes('msvc')) return 1;
-              return 0;
-            });
+          try {
+            const toolchains = fs.readdirSync(vPath, { withFileTypes: true });
+            for (const tc of toolchains) {
+              if (!tc.isDirectory()) continue;
+              const tcPath = path.join(vPath, tc.name);
+              const incDir = path.join(tcPath, 'include');
+              if (fs.existsSync(incDir)) {
+                const includePaths = collectQtIncludes(incDir);
+                const hasQtIndicators =
+                  includePaths.length > 1 ||
+                  fs.existsSync(path.join(incDir, 'qglobal.h')) ||
+                  fs.existsSync(path.join(incDir, 'QtCore', 'qstring.h')) ||
+                  fs.existsSync(path.join(incDir, 'qtcore-config.h'));
+                if (!hasQtIndicators) continue;
 
-          for (const tc of preferredTc) {
-            const tcPath = path.join(vPath, tc);
-            const incDir = path.join(tcPath, 'include');
-            if (fs.existsSync(incDir)) {
-              const includePaths = collectQtIncludes(incDir);
-              const libDir = path.join(tcPath, 'lib');
-              return {
-                name: 'Qt',
-                version: vDir,
-                rootPath: tcPath,
-                includePaths,
-                libraryPaths: fs.existsSync(libDir) ? [libDir] : undefined,
-                source: 'filesystem'
-              };
+                const isCross = /^(?:android|wasm|ios|qnx|integrity|winrt)/i.test(tc.name);
+                const score = scoreQtToolchain(tc.name, options);
+                const libDir = path.join(tcPath, 'lib');
+
+                candidates.push({
+                  version: vDir,
+                  toolchain: tc.name,
+                  rootPath: tcPath,
+                  includePaths,
+                  libraryPaths: fs.existsSync(libDir) ? [libDir] : undefined,
+                  isDesktop: !isCross,
+                  score
+                });
+              }
             }
+          } catch {
+            // Ignore folder read error
+          }
+        }
+
+        if (candidates.length > 0) {
+          // If desktop toolchains exist, eliminate cross-compilation toolchains unless cross-compilation was explicitly requested
+          const wantCross = Boolean(
+            options.targetPlatform &&
+            options.targetPlatform !== 'desktop' &&
+            ['android', 'wasm', 'ios', 'qnx'].includes(options.targetPlatform.toLowerCase())
+          );
+          const validCandidates = (!wantCross && candidates.some((c) => c.isDesktop))
+            ? candidates.filter((c) => c.isDesktop)
+            : candidates;
+
+          validCandidates.sort((a, b) => {
+            if (b.score !== a.score) return b.score - a.score;
+            return compareSemverDesc(a.version, b.version);
+          });
+
+          const best = validCandidates[0];
+          if (best) {
+            return {
+              name: 'Qt',
+              version: best.version,
+              rootPath: best.rootPath,
+              includePaths: best.includePaths,
+              libraryPaths: best.libraryPaths,
+              source: 'filesystem'
+            };
           }
         }
       } catch {
@@ -786,7 +1058,9 @@ export class ExternalSdkDetector {
       ],
       Qt: [
         /#\s*include\s*[<"]Q[A-Z]/,
+        /#\s*include\s*[<"]q[a-z0-9_]+\.h[>"]/i,
         /#\s*include\s*[<"]Qt[A-Za-z]+\//i,
+        /\bQT\s*\+?=/i,
         /find_package\s*\(\s*Qt[56]?/i,
         /qt_add_executable/i,
         /qt_add_resources/i,
@@ -853,7 +1127,13 @@ export class ExternalSdkDetector {
             usedSdks.add('CUDA');
           }
 
-          if (sourceExts.has(ext) || buildFileNames.has(lowerName) || lowerName.endsWith('.vcxproj')) {
+          if (
+            sourceExts.has(ext) ||
+            buildFileNames.has(lowerName) ||
+            lowerName.endsWith('.vcxproj') ||
+            ext === '.pro' ||
+            ext === '.pri'
+          ) {
             filesChecked++;
             try {
               const filePath = path.join(currentDir, entry.name);
@@ -904,7 +1184,11 @@ export class ExternalSdkDetector {
     workspaceRoot: string,
     options: ExternalSdkDetectorOptions = {}
   ): string[] {
-    const sdks = ExternalSdkDetector.detectAll(options);
+    const mergedOpts: ExternalSdkDetectorOptions = {
+      workspaceRoot,
+      ...options
+    };
+    const sdks = ExternalSdkDetector.detectAll(mergedOpts);
     const usedSdkNames = ExternalSdkDetector.getUsedSdksInWorkspace(
       workspaceRoot,
       sdks.map((s) => s.name)
@@ -931,15 +1215,21 @@ export class ExternalSdkDetector {
    * Synchronizes discovered external SDK include paths into the workspace .clangd YAML configuration.
    * Only synchronizes SDKs that are actually used in the workspace, avoiding polluting non-Vulkan/SDK projects.
    * If .clangd exists, appends flags non-destructively without overriding existing user configuration.
+   * Automatically purges any obsolete cross-compilation Qt include paths (e.g. android_arm64_v8a) when
+   * a desktop Qt kit (MinGW, MSVC) is active.
    */
   public static syncWorkspaceClangdConfig(
     workspaceRoot: string,
     options: ExternalSdkDetectorOptions = {}
   ): boolean {
     try {
+      const mergedOpts: ExternalSdkDetectorOptions = {
+        workspaceRoot,
+        ...options
+      };
       const includes = options.requireWorkspaceMatch === false
-        ? ExternalSdkDetector.getAllIncludePaths(options)
-        : ExternalSdkDetector.getWorkspaceIncludePaths(workspaceRoot, options);
+        ? ExternalSdkDetector.getAllIncludePaths(mergedOpts)
+        : ExternalSdkDetector.getWorkspaceIncludePaths(workspaceRoot, mergedOpts);
 
       if (includes.length === 0) return false;
 
@@ -958,9 +1248,35 @@ export class ExternalSdkDetector {
         return true;
       }
 
-      const existing = fs.readFileSync(clangdPath, 'utf8');
+      let existing = fs.readFileSync(clangdPath, 'utf8');
+
+      // If desktop Qt is detected, purge any obsolete cross-compilation Qt flags (e.g. android, wasm)
+      const hasDesktopQt = addFlags.some((f) => /(?:mingw|msvc|clang|gcc)[a-z0-9_]*\/include/i.test(f));
+      let hadObsoleteCrossQt = false;
+      if (hasDesktopQt) {
+        const cleaned = existing
+          .split('\n')
+          .filter((line) => {
+            if (/-(?:I|isystem)["']?.*[/\\](?:android|wasm|ios|qnx|integrity)[a-z0-9_]*[/\\]include/i.test(line)) {
+              hadObsoleteCrossQt = true;
+              return false;
+            }
+            return true;
+          })
+          .join('\n');
+        if (hadObsoleteCrossQt) {
+          existing = cleaned;
+        }
+      }
+
       const missingFlags = addFlags.filter((f) => !existing.includes(f));
-      if (missingFlags.length === 0) return false;
+      if (missingFlags.length === 0) {
+        if (hadObsoleteCrossQt) {
+          fs.writeFileSync(clangdPath, existing, 'utf8');
+          return true;
+        }
+        return false;
+      }
 
       if (/CompileFlags:\s*\r?\n\s*Add:/i.test(existing)) {
         const replacement = missingFlags.map((f) => `    - "${f}"`).join('\n');

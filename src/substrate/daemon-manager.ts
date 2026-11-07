@@ -209,14 +209,19 @@ export class DaemonManager implements vscode.Disposable {
         }
 
         if (detectExternalSdks) {
-          const sdkIncludes = ExternalSdkDetector.getWorkspaceIncludePaths(folder.uri.fsPath);
+          const qtToolchain = config.get<string>('discovery.qtToolchain', '');
+          const sdkOpts = {
+            workspaceRoot: folder.uri.fsPath,
+            preferredToolchain: qtToolchain.trim() ? qtToolchain.trim() : undefined
+          };
+          const sdkIncludes = ExternalSdkDetector.getWorkspaceIncludePaths(folder.uri.fsPath, sdkOpts);
           for (const inc of sdkIncludes) {
             const flag = `-I${inc.replace(/\\/g, '/')}`;
             if (!fallbackFlags.includes(flag)) {
               fallbackFlags.push(flag);
             }
           }
-          ExternalSdkDetector.syncWorkspaceClangdConfig(folder.uri.fsPath);
+          ExternalSdkDetector.syncWorkspaceClangdConfig(folder.uri.fsPath, sdkOpts);
         }
       }
     }
