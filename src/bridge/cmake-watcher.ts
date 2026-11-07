@@ -13,6 +13,26 @@ export async function writeCompilationDatabase(filePath: string, content: string
   return filePath;
 }
 
+function isCompilationDatabase(filePath: string): boolean {
+  const norm = filePath.replace(/\\/g, '/').toLowerCase();
+  return (
+    norm.endsWith('/compile_commands.json') ||
+    norm.endsWith('/compile_flags.txt') ||
+    norm.endsWith('/.clangd')
+  );
+}
+
+function isCmakeConfiguration(filePath: string): boolean {
+  const norm = filePath.replace(/\\/g, '/').toLowerCase();
+  return (
+    norm.endsWith('/cmakelists.txt') ||
+    norm.endsWith('.cmake') ||
+    norm.endsWith('/cmakepresets.json') ||
+    norm.endsWith('/cmakeuserpresets.json') ||
+    norm.includes('/.cmake/api/v1/reply/')
+  );
+}
+
 export class CMakeWatcher implements vscode.Disposable {
   private watcher: vscode.FileSystemWatcher | null = null;
   private disposables: vscode.Disposable[] = [];
@@ -42,16 +62,25 @@ export class CMakeWatcher implements vscode.Disposable {
 
     this.disposables.push(
       this.watcher.onDidChange(async (uri) => {
-        if (this.onCmakeUpdate) await this.onCmakeUpdate(uri);
-        this.debouncedReload(uri);
+        if (isCmakeConfiguration(uri.fsPath)) {
+          if (this.onCmakeUpdate) await this.onCmakeUpdate(uri);
+        } else if (isCompilationDatabase(uri.fsPath)) {
+          this.debouncedReload(uri);
+        }
       }),
       this.watcher.onDidCreate(async (uri) => {
-        if (this.onCmakeUpdate) await this.onCmakeUpdate(uri);
-        this.debouncedReload(uri);
+        if (isCmakeConfiguration(uri.fsPath)) {
+          if (this.onCmakeUpdate) await this.onCmakeUpdate(uri);
+        } else if (isCompilationDatabase(uri.fsPath)) {
+          this.debouncedReload(uri);
+        }
       }),
       this.watcher.onDidDelete(async (uri) => {
-        if (this.onCmakeUpdate) await this.onCmakeUpdate(uri);
-        this.debouncedReload({ fsPath: '' } as any);
+        if (isCmakeConfiguration(uri.fsPath)) {
+          if (this.onCmakeUpdate) await this.onCmakeUpdate(uri);
+        } else if (isCompilationDatabase(uri.fsPath)) {
+          this.debouncedReload({ fsPath: '' } as any);
+        }
       })
     );
   }

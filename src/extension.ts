@@ -109,7 +109,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
     async (uri) => {
       if (uri.fsPath.endsWith('CMakeLists.txt') || uri.fsPath.endsWith('.cmake')) {
-        await cmakeManager?.refresh();
+        await cmakeManager?.refresh(false);
       }
     }
   );

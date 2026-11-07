@@ -128,12 +128,33 @@ export function enrichCompletionItemWithStl(item: vscode.CompletionItem): void {
 }
 
 /**
+ * Detects whether an error is caused by a destroyed or closing stdio stream or closed LSP connection.
+ */
+export function isConnectionOrStreamError(error: unknown): boolean {
+  if (!error) return false;
+  const msg = String((error as any).message ?? error);
+  const code = (error as any).code;
+  return (
+    code === -32099 || // LSPErrorCodes.ServerCancelled / Stream destroyed
+    code === -32097 || // ServerNotInitialized
+    code === 'ERR_STREAM_DESTROYED' ||
+    msg.includes('stream was destroyed') ||
+    msg.includes('Cannot call write after a stream was destroyed') ||
+    msg.includes('Connection got disposed') ||
+    msg.includes('connection is closed') ||
+    msg.includes('Language client is not running') ||
+    msg.includes('Connection to server is erroring')
+  );
+}
+
+/**
  * Applies protocol filters and LSP client middleware to preserve Clangd's
  * semantic precision, trigger parameter hints, format qualified symbols,
- * and debounce rapid editor UI events.
+ * debounce rapid editor UI events, and gracefully isolate stream lifecycle errors.
  */
 export function createClangdMiddleware(
-  rankingTable: StlRankingTable = new StlRankingTable()
+  rankingTable: StlRankingTable = new StlRankingTable(),
+  isServerReady?: () => boolean
 ): Middleware {
   return {
     provideCompletionItem: async (
@@ -148,11 +169,20 @@ export function createClangdMiddleware(
         token: vscode.CancellationToken
       ) => vscode.ProviderResult<vscode.CompletionItem[] | vscode.CompletionList>
     ): Promise<vscode.CompletionList | vscode.CompletionItem[]> => {
-      if (token.isCancellationRequested) {
+      if (token.isCancellationRequested || (isServerReady && !isServerReady())) {
         return [];
       }
 
-      const list = await next(document, position, context, token);
+      let list: vscode.CompletionList | vscode.CompletionItem[] | null | undefined;
+      try {
+        list = await next(document, position, context, token);
+      } catch (err: unknown) {
+        if (isConnectionOrStreamError(err)) {
+          return [];
+        }
+        throw err;
+      }
+
       if (token.isCancellationRequested || !list) {
         return list ?? [];
       }
@@ -233,14 +263,21 @@ export function createClangdMiddleware(
         token: vscode.CancellationToken
       ) => vscode.ProviderResult<vscode.CompletionItem>
     ): Promise<vscode.CompletionItem> => {
-      if (token.isCancellationRequested) {
+      if (token.isCancellationRequested || (isServerReady && !isServerReady())) {
         return item;
       }
-      const resolved = (await next(item, token)) ?? item;
-      if (!resolved.documentation) {
-        enrichCompletionItemWithStl(resolved);
+      try {
+        const resolved = (await next(item, token)) ?? item;
+        if (!resolved.documentation) {
+          enrichCompletionItemWithStl(resolved);
+        }
+        return resolved;
+      } catch (err: unknown) {
+        if (isConnectionOrStreamError(err)) {
+          return item;
+        }
+        throw err;
       }
-      return resolved;
     },
 
     provideWorkspaceSymbols: async (
@@ -251,7 +288,18 @@ export function createClangdMiddleware(
         token: vscode.CancellationToken
       ) => vscode.ProviderResult<vscode.SymbolInformation[]>
     ): Promise<vscode.SymbolInformation[] | null | undefined> => {
-      const symbols = await next(query, token);
+      if (token.isCancellationRequested || (isServerReady && !isServerReady())) {
+        return [];
+      }
+      let symbols: vscode.SymbolInformation[] | null | undefined;
+      try {
+        symbols = await next(query, token);
+      } catch (err: unknown) {
+        if (isConnectionOrStreamError(err)) {
+          return [];
+        }
+        throw err;
+      }
       if (!query.includes('::') || !symbols) {
         return symbols;
       }
@@ -275,7 +323,7 @@ export function createClangdMiddleware(
         token: vscode.CancellationToken
       ) => vscode.ProviderResult<vscode.Hover>
     ): Promise<vscode.Hover | null | undefined> => {
-      if (token.isCancellationRequested) {
+      if (token.isCancellationRequested || (isServerReady && !isServerReady())) {
         return null;
       }
 
@@ -341,7 +389,19 @@ export function createClangdMiddleware(
         token: vscode.CancellationToken
       ) => vscode.ProviderResult<vscode.Definition | vscode.LocationLink[]>
     ): Promise<vscode.Definition | vscode.LocationLink[] | null | undefined> => {
-      const defs = await next(document, position, token);
+      if (token.isCancellationRequested || (isServerReady && !isServerReady())) {
+        return null;
+      }
+
+      let defs: vscode.Definition | vscode.LocationLink[] | null | undefined;
+      try {
+        defs = await next(document, position, token);
+      } catch (err: unknown) {
+        if (!isConnectionOrStreamError(err)) {
+          throw err;
+        }
+      }
+
       if (defs && (!Array.isArray(defs) || defs.length > 0)) {
         return prioritizeDefinitionLocations(defs as any);
       }
@@ -368,6 +428,121 @@ export function createClangdMiddleware(
       }
 
       return defs;
+    },
+
+    provideDocumentSemanticTokens: async (
+      document: vscode.TextDocument,
+      token: vscode.CancellationToken,
+      next: (
+        document: vscode.TextDocument,
+        token: vscode.CancellationToken
+      ) => vscode.ProviderResult<vscode.SemanticTokens>
+    ): Promise<vscode.SemanticTokens | null | undefined> => {
+      if (token.isCancellationRequested || (isServerReady && !isServerReady())) {
+        return null;
+      }
+      try {
+        return await next(document, token);
+      } catch (err: unknown) {
+        if (isConnectionOrStreamError(err)) {
+          return null;
+        }
+        throw err;
+      }
+    },
+
+    provideDocumentSemanticTokensEdits: async (
+      document: vscode.TextDocument,
+      previousResultId: string,
+      token: vscode.CancellationToken,
+      next: (
+        document: vscode.TextDocument,
+        previousResultId: string,
+        token: vscode.CancellationToken
+      ) => vscode.ProviderResult<vscode.SemanticTokensEdits | vscode.SemanticTokens>
+    ): Promise<vscode.SemanticTokensEdits | vscode.SemanticTokens | null | undefined> => {
+      if (token.isCancellationRequested || (isServerReady && !isServerReady())) {
+        return null;
+      }
+      try {
+        return await next(document, previousResultId, token);
+      } catch (err: unknown) {
+        if (isConnectionOrStreamError(err)) {
+          return null;
+        }
+        throw err;
+      }
+    },
+
+    provideDocumentRangeSemanticTokens: async (
+      document: vscode.TextDocument,
+      range: vscode.Range,
+      token: vscode.CancellationToken,
+      next: (
+        document: vscode.TextDocument,
+        range: vscode.Range,
+        token: vscode.CancellationToken
+      ) => vscode.ProviderResult<vscode.SemanticTokens>
+    ): Promise<vscode.SemanticTokens | null | undefined> => {
+      if (token.isCancellationRequested || (isServerReady && !isServerReady())) {
+        return null;
+      }
+      try {
+        return await next(document, range, token);
+      } catch (err: unknown) {
+        if (isConnectionOrStreamError(err)) {
+          return null;
+        }
+        throw err;
+      }
+    },
+
+    provideInlayHints: async (
+      document: vscode.TextDocument,
+      range: vscode.Range,
+      token: vscode.CancellationToken,
+      next: (
+        document: vscode.TextDocument,
+        range: vscode.Range,
+        token: vscode.CancellationToken
+      ) => vscode.ProviderResult<vscode.InlayHint[]>
+    ): Promise<vscode.InlayHint[] | null | undefined> => {
+      if (token.isCancellationRequested || (isServerReady && !isServerReady())) {
+        return null;
+      }
+      try {
+        return await next(document, range, token);
+      } catch (err: unknown) {
+        if (isConnectionOrStreamError(err)) {
+          return null;
+        }
+        throw err;
+      }
+    },
+
+    provideCodeActions: async (
+      document: vscode.TextDocument,
+      range: vscode.Range,
+      context: vscode.CodeActionContext,
+      token: vscode.CancellationToken,
+      next: (
+        document: vscode.TextDocument,
+        range: vscode.Range,
+        context: vscode.CodeActionContext,
+        token: vscode.CancellationToken
+      ) => vscode.ProviderResult<(vscode.Command | vscode.CodeAction)[]>
+    ): Promise<(vscode.Command | vscode.CodeAction)[] | null | undefined> => {
+      if (token.isCancellationRequested || (isServerReady && !isServerReady())) {
+        return null;
+      }
+      try {
+        return await next(document, range, context, token);
+      } catch (err: unknown) {
+        if (isConnectionOrStreamError(err)) {
+          return null;
+        }
+        throw err;
+      }
     }
   };
 }

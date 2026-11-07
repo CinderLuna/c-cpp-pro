@@ -178,6 +178,15 @@ export class ParameterInformation {
   constructor(public label: string | [number, number], public documentation?: any) {}
 }
 
+export class SemanticTokens {
+  constructor(public readonly data: Uint32Array, public readonly resultId?: string) {}
+}
+
+export class SemanticTokensEdits {
+  constructor(public readonly edits: any[], public readonly resultId?: string) {}
+}
+
+
 export class TextEdit {
   static replace(range: Range, newText: string): TextEdit {
     return new TextEdit(range, newText);
@@ -849,7 +858,9 @@ export const mockVscode: any = {
     Coverage: 3
   },
   EvaluatableExpression,
-  SnippetTextEdit
+  SnippetTextEdit,
+  SemanticTokens,
+  SemanticTokensEdits
 };
 
 const originalRequire = (Module.prototype as any).require;
