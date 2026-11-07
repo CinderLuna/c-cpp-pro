@@ -809,6 +809,9 @@ export const mockVscode: any = {
             uri,
             range: undefined,
             children: {
+              get size() {
+                return childrenMap.size;
+              },
               get: (k: string) => childrenMap.get(k),
               add: (c: any) => childrenMap.set(c.id, c),
               delete: (k: string) => childrenMap.delete(k),

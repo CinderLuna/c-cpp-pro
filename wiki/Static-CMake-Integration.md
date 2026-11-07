@@ -1,74 +1,83 @@
-# Static CMake Integration
+# CMake Integration & Modern Tooling
 
-C/C++ Pro features a static CMake intelligence engine that parses `CMakeLists.txt` files and `.cmake` modules directly in memory without requiring the `cmake` binary, configuration directories, or build trees.
-
----
-
-## 1. Why Static CMake Parsing?
-
-Traditional CMake extensions require configuring and generating a complete build directory (`build/` or `out/`) before IntelliSense becomes functional. This requires installed dependencies, functional toolchain files, and significant disk and CPU overhead.
-
-C/C++ Pro's static CMake engine provides:
-- **Instant IntelliSense**: Semantic autocomplete and error checking work the moment you open a CMake workspace.
-- **No External Binaries**: Operates completely independently of the `cmake` executable or ninja/make generators.
-- **Zero Disk Bloat**: Extracts compile flags, definitions, and include directories without generating build trees.
-- **Native Performance**: Powered by a high-throughput Rust parser (`crates/c-cpp-pro-native/src/cmake.rs`) that processes thousands of lines in milliseconds.
+C/C++ Pro features a hybrid CMake intelligence engine that combines instantaneous, zero-binary static parsing of `CMakeLists.txt` with full ingestion of modern CMake FileAPI (`codemodel-v2`), CMake Presets, target debugging, and CTest integration.
 
 ---
 
-## 2. Supported CMake Commands & Semantics
+## 1. Hybrid CMake Architecture
 
-The static parser recognizes and models the core CMake target model:
+C/C++ Pro implements a dual-mode hybrid architecture:
 
-| Command | Modeling & Extraction |
-| :--- | :--- |
-| `project(...)` | Workspace naming and language configuration (`C`, `CXX`). |
-| `set(VAR ...)` | Variable assignment and dynamic variable expansion (`${VAR}`). |
-| `include_directories(...)` | Workspace-global include directories. |
-| `add_definitions(...)` | Workspace-global preprocessor defines (`-DFOO`). |
-| `add_executable(target ...)` | Executable target definition and source file association. |
-| `add_library(target ...)` | Static, Shared, Module, and Interface library definitions. |
-| `target_include_directories(...)` | Per-target include paths with `PUBLIC`, `PRIVATE`, or `INTERFACE` visibility. |
-| `target_compile_definitions(...)` | Per-target preprocessor defines with visibility scoping. |
-| `target_sources(...)` | Associating source files with existing targets. |
-| `target_link_libraries(...)` | Dependency modeling and transitive include/define propagation. |
-| `add_subdirectory(...)` | Recursive traversal and parsing of sub-projects. |
-| `include(...)` | Inlining and parsing external `.cmake` modules. |
+1. **Modern CMake FileAPI Ingestion (Default for Configured Workspaces)**:
+   - When a project has been configured (e.g. in `build/` or an active preset binary directory), C/C++ Pro automatically detects and ingests CMake FileAPI artifacts (`.cmake/api/v1/reply/`):
+     - `codemodel-v2`: Exact compilation flags, target definitions, sysroots, include directories, and preprocessor definitions.
+     - `cache-v2`: Full cache variables and entry metadata.
+     - `toolchains-v1`: Extracted compiler paths, versions, and target architecture triples.
+   - Watches `.cmake/api/v1/reply/` to automatically update IntelliSense when external CMake builds run.
 
-### Generator Expression Handling
-C/C++ Pro automatically evaluates build-time generator expressions:
-- **Unwraps**: `$<BUILD_INTERFACE:path>` is unwrapped and included in IntelliSense paths.
-- **Discards**: `$<INSTALL_INTERFACE:path>` is ignored to reflect active in-source development paths.
+2. **Zero-Binary Static AST Parser (Fallback & Unconfigured Projects)**:
+   - If CMake has not yet run or no build tree exists, C/C++ Pro's high-throughput Rust parser (`crates/c-cpp-pro-native/src/cmake.rs`) parses `CMakeLists.txt` files and `.cmake` modules directly in memory in milliseconds.
+   - Semantic autocomplete, include paths, and error checking work the moment you open a CMake workspace, even before any build directory exists.
 
 ---
 
-## 3. Automatic Compilation Database Synthesis
+## 2. CMake Presets Support
 
-C/C++ Pro can automatically synthesize a complete `compile_commands.json` compilation database directly from your CMake targets:
-
-1. Open the Command Palette (`Ctrl+Shift+P` or `Cmd+Shift+P`).
-2. Run **`C/C++ Pro: Generate compile_commands.json from CMakeLists.txt`** (`c-cpp-pro.cmake.generateCompilationDatabase`).
-3. C/C++ Pro compiles target sources and isolated private/public includes into a standards-compliant compilation database.
-4. Language standards are tailored per source file:
-   - C files (`.c`) receive pure C standards (`-std=c17`, `clang`).
-   - C++ files (`.cpp`, `.cxx`, `.cc`) receive C++ standards (`-std=c++20`, `clang++`).
+C/C++ Pro supports `CMakePresets.json` and `CMakeUserPresets.json` (schema versions 1 through 9+):
+- **Configure Presets**: Evaluates generator, binary directory, cache variables, toolchain files, and environment definitions.
+- **Build Presets**: Evaluates target sets, jobs, and build options.
+- **Test Presets**: Connects test filters and timeouts to CTest.
+- **Macro Expansions**: Supports standard CMake macros (`${sourceDir}`, `${presetName}`, `${generator}`, `${hostSystemName}`, `${env:VAR}`).
+- **Preset Switching**: Use the Command Palette to select configure presets via **`C/C++ Pro: Select CMake Configure Preset`** (`c-cpp-pro.cmake.selectConfigurePreset`) or build presets via **`C/C++ Pro: Select CMake Build Preset`** (`c-cpp-pro.cmake.selectBuildPreset`).
 
 ---
 
-## 4. CMake Commands Reference
+## 3. Target-Aware Launch & Debug Engine
+
+C/C++ Pro extracts executable targets directly from CMake FileAPI and static declarations:
+- **Active Target Selection**: Click the **Target** widget on the status bar or run **`C/C++ Pro: Select Active CMake Launch Target`** (`c-cpp-pro.cmake.selectLaunchTarget`).
+- **Debugging**: Run **`C/C++ Pro: Debug Active CMake Target`** (`c-cpp-pro.cmake.debugTarget`) to immediately launch the target under C/C++ Pro's DAP engine (`lldb-dap`, `cppvsdbg`, or `gdb`) without authoring a manual `launch.json`.
+- **Run Without Debugging**: Run **`C/C++ Pro: Run Active CMake Target`** (`c-cpp-pro.cmake.launchTarget`) to execute the target inside the integrated terminal.
+
+---
+
+## 4. CTest Integration in Test Explorer
+
+CTest suites are discovered and displayed alongside source-scanned unit tests (GoogleTest, Catch2, Boost.Test, doctest) in the unified VS Code Test Explorer (`vscode.tests`):
+- Discovers tests via `ctest --show-only=json-v1` or by parsing `CTestTestfile.cmake`.
+- Supports Run and Debug profiles directly from the Test Explorer interface.
+- Streams live test execution output and failure diagnostics into the Test Results pane.
+
+---
+
+## 5. Single-File Quick Compilation
+
+Quickly verify syntax, template instantiations, and compiler diagnostics for the active source file without triggering full project linkage:
+- Right-click in the editor and select **`C/C++ Pro: Compile Active File (Syntax & Diagnostics)`** (`c-cpp-pro.cmake.compileActiveFile`).
+- Resolves the exact compile command from `compile_commands.json` or synthesized flags.
+- Spawns the compiler in compile/syntax-only mode (`-fsyntax-only` / `/Zs`) and streams warnings and errors directly into the Problems panel using streaming problem matchers.
+
+---
+
+## 6. AST-Assisted "Add File to CMakeLists.txt" Refactoring
+
+When creating new `.cpp` or `.h` files:
+- C/C++ Pro detects if the file is not yet tracked in `CMakeLists.txt`.
+- A Refactor Quick Fix appears: **`C/C++ Pro: Add to CMake target '<targetName>'`**.
+- Automatically inserts the source path into `target_sources()`, `add_executable()`, or `add_library()` preserving indentation and whitespace formatting.
+
+---
+
+## 7. CMake Commands Reference
 
 | Command | Identifier | Action |
 | :--- | :--- | :--- |
-| **CMake Intelligence Menu** | `c-cpp-pro.cmake.menu` | Opens a quick-pick popup with available CMake actions. |
-| **Re-scan CMakeLists.txt Includes** | `c-cpp-pro.cmake.rescan` | Manually triggers a re-parse of all workspace `CMakeLists.txt` files. |
+| **CMake Intelligence Menu** | `c-cpp-pro.cmake.menu` | Opens a quick-pick popup with all CMake actions, targets, and presets. |
+| **Select Configure Preset** | `c-cpp-pro.cmake.selectConfigurePreset` | Switch active configure preset from `CMakePresets.json`. |
+| **Select Build Preset** | `c-cpp-pro.cmake.selectBuildPreset` | Switch active build preset from `CMakePresets.json`. |
+| **Select Launch Target** | `c-cpp-pro.cmake.selectLaunchTarget` | Switch the active executable target for run and debug. |
+| **Debug Active CMake Target** | `c-cpp-pro.cmake.debugTarget` | Start DAP debugging for the active target binary. |
+| **Run Active CMake Target** | `c-cpp-pro.cmake.launchTarget` | Run the active target binary in the integrated terminal. |
+| **Compile Active File** | `c-cpp-pro.cmake.compileActiveFile` | Quick syntax and diagnostic check for active C/C++ file. |
+| **Re-scan CMakeLists.txt Includes** | `c-cpp-pro.cmake.rescan` | Manually triggers a re-parse of workspace `CMakeLists.txt` files. |
 | **Generate Compilation Database** | `c-cpp-pro.cmake.generateCompilationDatabase` | Synthesizes `compile_commands.json` from parsed CMake targets. |
-
----
-
-## 5. Configuration Settings
-
-| Setting | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `c-cpp-pro.cmake.autoScan` | `boolean` | `true` | Automatically parse `CMakeLists.txt` on folder open and file save. |
-| `c-cpp-pro.cppStandard` | `string` | `"c++20"` | C++ standard emitted for synthesized CMake compile commands. |
-| `c-cpp-pro.cStandard` | `string` | `"c17"` | C standard emitted for synthesized CMake compile commands. |

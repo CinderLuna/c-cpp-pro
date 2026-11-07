@@ -39,6 +39,7 @@ import { MacroEvaluatorManager } from './intelligence/macro-evaluator';
 import { DisassemblyContentProvider } from './compiler/disassembly-view';
 import { HierarchyGraphManager } from './hierarchy/hierarchy-graph';
 import { CMakeManager } from './cmake/cmake-manager';
+import { CMakeCodeActionProvider } from './cmake/cmake-modifier';
 import { registerAllCommands } from './commands/command-registry';
 import { CppIncludeDocumentLinkProvider } from './intelligence/document-links';
 
@@ -219,6 +220,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       new VcpkgAdvisor(),
       {
         providedCodeActionKinds: VcpkgAdvisor.providedCodeActionKinds
+      }
+    ),
+    vscode.languages.registerCodeActionsProvider(
+      cppSelector,
+      new CMakeCodeActionProvider(),
+      {
+        providedCodeActionKinds: CMakeCodeActionProvider.providedCodeActionKinds
       }
     ),
     vscode.languages.registerEvaluatableExpressionProvider(

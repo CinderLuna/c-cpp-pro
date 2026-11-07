@@ -6,17 +6,34 @@ import { CMakeDetector } from './cmake-detector';
 import { CompilerDetector } from '../prober/compiler-detector';
 import { SystemIncludeExtractor } from '../prober/system-includes';
 import { NativeBridge } from '../native/native-bridge';
+import { CMakeFileApiReader } from './cmake-file-api';
+import { CMakePresetsParser, CMakeConfigurePreset, CMakeBuildPreset } from './cmake-presets';
+import { CMakeTargetLauncher, CMakeExecutableTarget } from './cmake-target-launcher';
+import { SingleFileCompiler } from './single-file-compile';
 
 export class CMakeManager implements vscode.Disposable {
   private statusBarItem: vscode.StatusBarItem;
   private disposables: vscode.Disposable[] = [];
   private activeProject: CMakeProjectInfo | null = null;
+  private isUsingFileApi = false;
+
+  private targetLauncher: CMakeTargetLauncher;
+  private singleFileCompiler: SingleFileCompiler;
+
+  private activeConfigurePreset: CMakeConfigurePreset | undefined;
+  private activeBuildPreset: CMakeBuildPreset | undefined;
+  private availableConfigurePresets: CMakeConfigurePreset[] = [];
+  private availableBuildPresets: CMakeBuildPreset[] = [];
 
   constructor(
     private readonly detector: CompilerDetector,
     private readonly extractor: SystemIncludeExtractor,
     private readonly onReloadServer?: () => Promise<void>
   ) {
+    this.targetLauncher = new CMakeTargetLauncher();
+    this.singleFileCompiler = new SingleFileCompiler();
+    this.disposables.push(this.targetLauncher, this.singleFileCompiler);
+
     this.statusBarItem = vscode.window.createStatusBarItem(
       vscode.StatusBarAlignment.Left,
       66
@@ -29,6 +46,18 @@ export class CMakeManager implements vscode.Disposable {
     return this.activeProject;
   }
 
+  public getTargetLauncher(): CMakeTargetLauncher {
+    return this.targetLauncher;
+  }
+
+  public getSingleFileCompiler(): SingleFileCompiler {
+    return this.singleFileCompiler;
+  }
+
+  public getIsUsingFileApi(): boolean {
+    return this.isUsingFileApi;
+  }
+
   public getIncludeDirectories(): string[] {
     return this.activeProject?.includeDirectories ?? [];
   }
@@ -37,9 +66,17 @@ export class CMakeManager implements vscode.Disposable {
     return this.activeProject?.compileDefinitions ?? [];
   }
 
+  public getActiveConfigurePreset(): CMakeConfigurePreset | undefined {
+    return this.activeConfigurePreset;
+  }
+
+  public getActiveBuildPreset(): CMakeBuildPreset | undefined {
+    return this.activeBuildPreset;
+  }
+
   /**
-   * Initializes the CMake subsystem by statically parsing the workspace CMakeLists.txt
-   * and including discovered include paths and definitions.
+   * Initializes the CMake subsystem by loading presets, attempting FileAPI ingestion,
+   * or falling back to static AST parsing.
    */
   public async initialize(): Promise<void> {
     const folders = vscode.workspace.workspaceFolders;
@@ -58,8 +95,10 @@ export class CMakeManager implements vscode.Disposable {
   }
 
   /**
-   * Statically re-parses CMakeLists.txt across the workspace, updates active project info,
-   * syncs include paths into IntelliSense, and notifies the language server.
+   * Refreshes CMake configuration using a hybrid approach:
+   * 1. Loads CMakePresets.json / CMakeUserPresets.json if present.
+   * 2. Inspects build directory for CMake FileAPI (codemodel-v2). If found, ingests 100% accurate targets and flags.
+   * 3. If FileAPI is not found (e.g. unconfigured workspace), falls back to our zero-binary static AST parser.
    */
   public async refresh(reloadServer = true): Promise<void> {
     const folders = vscode.workspace.workspaceFolders;
@@ -69,6 +108,45 @@ export class CMakeManager implements vscode.Disposable {
     }
 
     const rootPath = folders[0].uri.fsPath;
+
+    // 1. Ingest Presets
+    const presetsData = CMakePresetsParser.loadPresets(rootPath);
+    if (presetsData) {
+      this.availableConfigurePresets = presetsData.configurePresets;
+      this.availableBuildPresets = presetsData.buildPresets;
+      if (!this.activeConfigurePreset && presetsData.activeConfigurePreset) {
+        this.activeConfigurePreset = presetsData.activeConfigurePreset;
+      }
+      if (!this.activeBuildPreset && presetsData.activeBuildPreset) {
+        this.activeBuildPreset = presetsData.activeBuildPreset;
+      }
+    }
+
+    // 2. Try CMake FileAPI ingestion first
+    const replyDir = CMakeFileApiReader.findReplyDirectory(
+      rootPath,
+      this.activeConfigurePreset?.binaryDir
+    );
+
+    if (replyDir) {
+      const parsed = CMakeFileApiReader.parseReply(rootPath, replyDir);
+      if (parsed && parsed.project) {
+        this.activeProject = parsed.project;
+        this.isUsingFileApi = true;
+        this.targetLauncher.setExecutableTargets(parsed.executableTargets);
+        this.updateStatusBar();
+
+        await this.synthesizeCompilationDatabase();
+
+        if (reloadServer && this.onReloadServer) {
+          await this.onReloadServer();
+        }
+        return;
+      }
+    }
+
+    // 3. Fallback: Zero-binary static AST parser
+    this.isUsingFileApi = false;
     const project = await NativeBridge.parseCMakeWorkspace(rootPath);
     if (!project) {
       this.activeProject = null;
@@ -77,6 +155,24 @@ export class CMakeManager implements vscode.Disposable {
     }
 
     this.activeProject = project;
+
+    // Extract static executable targets
+    const staticExecutables: CMakeExecutableTarget[] = [];
+    const isWindows = process.platform === 'win32';
+    const binaryExt = isWindows ? '.exe' : '';
+
+    for (const t of project.targets) {
+      if (t.type === 'executable') {
+        const binCandidate = path.join(rootPath, 'build', t.name + binaryExt).replace(/\\/g, '/');
+        staticExecutables.push({
+          name: t.name,
+          binaryPath: binCandidate,
+          workingDirectory: path.join(rootPath, 'build').replace(/\\/g, '/')
+        });
+      }
+    }
+    this.targetLauncher.setExecutableTargets(staticExecutables);
+
     this.updateStatusBar();
 
     // Automatically synchronize discovered CMake includes into workspace compile_commands.json
@@ -85,6 +181,61 @@ export class CMakeManager implements vscode.Disposable {
     if (reloadServer && this.onReloadServer) {
       await this.onReloadServer();
     }
+  }
+
+  /**
+   * Prompts the user to switch the active CMake configure preset.
+   */
+  public async selectConfigurePreset(): Promise<CMakeConfigurePreset | null> {
+    if (this.availableConfigurePresets.length === 0) {
+      vscode.window.showInformationMessage('No configure presets defined in CMakePresets.json.');
+      return null;
+    }
+
+    const items = this.availableConfigurePresets.map((p) => ({
+      label: p.name === this.activeConfigurePreset?.name ? `$(check) ${p.name}` : `$(gear) ${p.name}`,
+      description: p.displayName || p.generator || '',
+      detail: p.description || (p.binaryDir ? `Binary directory: ${p.binaryDir}` : undefined),
+      preset: p
+    }));
+
+    const selected = await vscode.window.showQuickPick(items, {
+      placeHolder: 'Select active CMake configure preset'
+    });
+
+    if (!selected) return null;
+
+    this.activeConfigurePreset = selected.preset;
+    vscode.window.showInformationMessage(`Active CMake configure preset: ${this.activeConfigurePreset.name}`);
+    await this.refresh();
+    return this.activeConfigurePreset;
+  }
+
+  /**
+   * Prompts the user to switch the active CMake build preset.
+   */
+  public async selectBuildPreset(): Promise<CMakeBuildPreset | null> {
+    if (this.availableBuildPresets.length === 0) {
+      vscode.window.showInformationMessage('No build presets defined in CMakePresets.json.');
+      return null;
+    }
+
+    const items = this.availableBuildPresets.map((b) => ({
+      label: b.name === this.activeBuildPreset?.name ? `$(check) ${b.name}` : `$(tools) ${b.name}`,
+      description: b.displayName || (b.configurePreset ? `Config: ${b.configurePreset}` : ''),
+      detail: b.description,
+      preset: b
+    }));
+
+    const selected = await vscode.window.showQuickPick(items, {
+      placeHolder: 'Select active CMake build preset'
+    });
+
+    if (!selected) return null;
+
+    this.activeBuildPreset = selected.preset;
+    vscode.window.showInformationMessage(`Active CMake build preset: ${this.activeBuildPreset.name}`);
+    return this.activeBuildPreset;
   }
 
   /**
@@ -103,7 +254,15 @@ export class CMakeManager implements vscode.Disposable {
     const cppStandard = this.activeProject.cppStandard || 'c++20';
     const cStandard = this.activeProject.cStandard || 'c11';
     const cStdMsvc = (cStandard === 'c17' || cStandard === 'c11') ? cStandard : 'c11';
-    const targetFile = outputFilePath || path.join(workspaceRoot, 'compile_commands.json');
+
+    let targetFile = outputFilePath;
+    if (!targetFile) {
+      if (this.activeConfigurePreset && this.activeConfigurePreset.binaryDir) {
+        targetFile = path.join(this.activeConfigurePreset.binaryDir, 'compile_commands.json');
+      } else {
+        targetFile = path.join(workspaceRoot, 'compile_commands.json');
+      }
+    }
 
     const globalIncludes = [...(this.activeProject.globalIncludeDirectories ?? [])];
     const globalDefs = [...(this.activeProject.globalCompileDefinitions ?? [])];
@@ -282,17 +441,38 @@ export class CMakeManager implements vscode.Disposable {
 
     const incCount = this.activeProject.includeDirectories.length;
     const targetCount = this.activeProject.targets.length;
+    const driverLabel = this.isUsingFileApi ? 'FileAPI' : 'Static Parser';
 
     const items: (vscode.QuickPickItem & { action: string })[] = [
       {
         label: `$(folder) View Discovered Include Directories (${incCount})`,
-        description: 'Inspect include directories extracted from CMakeLists.txt',
+        description: `Inspect include directories extracted via ${driverLabel}`,
         action: 'showIncludes'
       },
       {
         label: `$(symbol-class) View Discovered Targets (${targetCount})`,
         description: 'Inspect executable and library targets declared in CMakeLists.txt',
         action: 'showTargets'
+      },
+      {
+        label: '$(gear) Select Configure Preset',
+        description: this.activeConfigurePreset ? `Active: ${this.activeConfigurePreset.name}` : 'Choose from CMakePresets.json',
+        action: 'selectPreset'
+      },
+      {
+        label: '$(play) Select Active Launch Target',
+        description: this.targetLauncher.getActiveTarget()?.name || 'Choose executable target to run/debug',
+        action: 'selectTarget'
+      },
+      {
+        label: '$(debug-start) Debug Active CMake Target',
+        description: 'Launch debugging session for active target',
+        action: 'debugTarget'
+      },
+      {
+        label: '$(check) Compile Active File (Syntax & Diagnostics)',
+        description: 'Quickly compile current source file without whole project linkage',
+        action: 'compileActiveFile'
       },
       {
         label: '$(refresh) Re-parse CMakeLists.txt',
@@ -307,7 +487,7 @@ export class CMakeManager implements vscode.Disposable {
     ];
 
     const selected = await vscode.window.showQuickPick(items, {
-      placeHolder: `C/C++ Pro CMake Intelligence — ${path.basename(this.activeProject.workspaceRoot)}`
+      placeHolder: `C/C++ Pro CMake Intelligence [${driverLabel}] — ${path.basename(this.activeProject.workspaceRoot)}`
     });
 
     if (!selected) return;
@@ -344,6 +524,26 @@ export class CMakeManager implements vscode.Disposable {
         break;
       }
 
+      case 'selectPreset': {
+        await this.selectConfigurePreset();
+        break;
+      }
+
+      case 'selectTarget': {
+        await this.targetLauncher.selectLaunchTarget();
+        break;
+      }
+
+      case 'debugTarget': {
+        await this.targetLauncher.debugTarget();
+        break;
+      }
+
+      case 'compileActiveFile': {
+        await this.singleFileCompiler.compileActiveFile();
+        break;
+      }
+
       case 'rescan': {
         await this.refresh();
         vscode.window.showInformationMessage(
@@ -373,15 +573,20 @@ export class CMakeManager implements vscode.Disposable {
     }
 
     const incCount = this.activeProject.includeDirectories.length;
-    this.statusBarItem.text = `$(tools) CMake: [${incCount} include${incCount === 1 ? '' : 's'}]`;
+    const mode = this.isUsingFileApi ? 'FileAPI' : 'Static';
+    const presetLabel = this.activeConfigurePreset ? ` [${this.activeConfigurePreset.name}]` : '';
+
+    this.statusBarItem.text = `$(tools) CMake: [${incCount} inc${incCount === 1 ? '' : 's'}]${presetLabel}`;
     this.statusBarItem.tooltip = [
-      'C/C++ Pro CMake Intelligence (Direct Static Parser):',
+      `C/C++ Pro CMake Intelligence (${mode}):`,
       `CMakeLists: ${this.activeProject.cmakeListsPath}`,
+      this.activeConfigurePreset ? `Active Preset: ${this.activeConfigurePreset.name}` : '',
       `Discovered Includes: ${incCount}`,
-      ...this.activeProject.includeDirectories.map((d) => `  - ${d}`),
-      `Standard: ${this.activeProject.cppStandard || 'default'}`,
-      'Click to inspect includes and targets'
-    ].join('\n');
+      ...this.activeProject.includeDirectories.slice(0, 10).map((d) => `  - ${d}`),
+      incCount > 10 ? `  ... and ${incCount - 10} more` : '',
+      `Targets: ${this.activeProject.targets.length}`,
+      'Click to open CMake Intelligence menu'
+    ].filter(Boolean).join('\n');
     this.statusBarItem.show();
   }
 
