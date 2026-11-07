@@ -1,9 +1,10 @@
 # C/C++ Pro - Local Extension Builder & Installer
-# Builds the native addon, compiles extension bundle, packages VSIX, and installs locally into VS Code.
+# Bumps version, builds native addon, compiles extension bundle, packages VSIX, and installs locally into VS Code.
 
 [CmdletBinding()]
 param(
     [switch]$SkipBuild,
+    [switch]$NoBump,
     [switch]$PreRelease,
     [string]$CodeBin = "code"
 )
@@ -36,9 +37,20 @@ if (-not $VscodeCli) {
     }
 }
 
-# 2. Package VSIX extension
+# 2. Bump patch version
+if (-not $NoBump -and -not $SkipBuild) {
+    Write-Host "[1/4] Bumping extension patch version..." -ForegroundColor Green
+    node (Join-Path $ScriptDir "bump-version.js")
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Version bump failed with exit code $LASTEXITCODE."
+    }
+} else {
+    Write-Host "[1/4] Skipping version bump (NoBump or SkipBuild specified)..." -ForegroundColor Yellow
+}
+
+# 3. Package VSIX extension
 if (-not $SkipBuild) {
-    Write-Host "[1/3] Packaging VSIX bundle (clean, native Rust build, production esbuild)..." -ForegroundColor Green
+    Write-Host "[2/4] Packaging VSIX bundle (clean, native Rust build, production esbuild)..." -ForegroundColor Green
     if ($PreRelease) {
         npm run package:pre
     } else {
@@ -48,11 +60,11 @@ if (-not $SkipBuild) {
         Write-Error "Packaging failed with exit code $LASTEXITCODE."
     }
 } else {
-    Write-Host "[1/3] Skipping build/packaging step (-SkipBuild requested)..." -ForegroundColor Yellow
+    Write-Host "[2/4] Skipping build/packaging step (-SkipBuild requested)..." -ForegroundColor Yellow
 }
 
-# 3. Locate generated VSIX file
-Write-Host "[2/3] Locating packaged VSIX extension..." -ForegroundColor Green
+# 4. Locate generated VSIX file
+Write-Host "[3/4] Locating packaged VSIX extension..." -ForegroundColor Green
 $VsixFile = Get-ChildItem -Path $RepoRoot -Filter "c-cpp-pro-*.vsix" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
 if (-not $VsixFile -or -not (Test-Path $VsixFile.FullName)) {
@@ -61,8 +73,8 @@ if (-not $VsixFile -or -not (Test-Path $VsixFile.FullName)) {
 
 Write-Host "Target VSIX: $($VsixFile.Name) ($([math]::Round($VsixFile.Length / 1MB, 2)) MB)" -ForegroundColor Cyan
 
-# 4. Install VSIX into VS Code
-Write-Host "[3/3] Installing $($VsixFile.Name) into $CodeBin..." -ForegroundColor Green
+# 5. Install VSIX into VS Code
+Write-Host "[4/4] Installing $($VsixFile.Name) into $CodeBin..." -ForegroundColor Green
 & $CodeBin --install-extension $VsixFile.FullName --force
 
 if ($LASTEXITCODE -ne 0) {
