@@ -12,6 +12,8 @@ import { CTestRunner } from '../src/testing/ctest-runner';
 import { StreamingProblemMatcher } from '../src/diagnostics/problem-matcher';
 import { CMakeListsModifier } from '../src/cmake/cmake-modifier';
 import { CMakeManager } from '../src/cmake/cmake-manager';
+import { CMakeLanguageService } from '../src/cmake/cmake-language-service';
+import { ProjectBuildController } from '../src/tasks/project-build-controller';
 import { CompilerDetector } from '../src/prober/compiler-detector';
 import { SystemIncludeExtractor } from '../src/prober/system-includes';
 
@@ -419,6 +421,108 @@ describe('CMake Modernization Subsystems (Issue #5)', () => {
       assert.ok(manager.getActiveProject()?.compileDefinitions.includes('FILEAPI_ACTIVE=1'));
 
       manager.dispose();
+    });
+  });
+
+  describe('CMakeLanguageService (IntelliSense for CMakeLists.txt)', () => {
+    it('should provide command, variable, keyword, and snippet completions', () => {
+      const service = new CMakeLanguageService();
+      const mockDoc = {
+        lineAt: () => ({ text: 'add_' }),
+        getText: () => 'add_'
+      } as any;
+
+      const items = service.provideCompletions(mockDoc, new vscode.Position(0, 4));
+      assert.ok(items.length > 50);
+
+      const addExec = items.find((i) => i.label === 'add_executable' && i.kind === vscode.CompletionItemKind.Function);
+      assert.ok(addExec);
+      assert.strictEqual(addExec.kind, vscode.CompletionItemKind.Function);
+
+      const addExecSnippet = items.find((i) => i.label === 'add_executable' && i.kind === vscode.CompletionItemKind.Snippet);
+      assert.ok(addExecSnippet);
+
+      const pubKeyword = items.find((i) => i.label === 'PUBLIC' && i.kind === vscode.CompletionItemKind.Keyword);
+      assert.ok(pubKeyword);
+      assert.strictEqual(pubKeyword.kind, vscode.CompletionItemKind.Keyword);
+
+      const cxxStd = items.find((i) => i.label === 'CMAKE_CXX_STANDARD' && i.kind === vscode.CompletionItemKind.Variable);
+      assert.ok(cxxStd);
+      assert.strictEqual(cxxStd.kind, vscode.CompletionItemKind.Variable);
+
+      service.dispose();
+    });
+
+    it('should provide rich hover documentation for CMake commands, variables, and keywords', () => {
+      const service = new CMakeLanguageService();
+
+      // 1. Command hover
+      const docCommand = {
+        getWordRangeAtPosition: () => new vscode.Range(0, 0, 0, 14),
+        getText: () => 'add_executable'
+      } as any;
+      const cmdHover = service.provideHover(docCommand, new vscode.Position(0, 5));
+      assert.ok(cmdHover);
+      const cmdText = (cmdHover.contents[0] as vscode.MarkdownString).value;
+      assert.ok(cmdText.includes('CMake Command: `add_executable`'));
+
+      // 2. Variable hover
+      const docVar = {
+        getWordRangeAtPosition: () => new vscode.Range(0, 0, 0, 18),
+        getText: () => 'CMAKE_CXX_STANDARD'
+      } as any;
+      const varHover = service.provideHover(docVar, new vscode.Position(0, 5));
+      assert.ok(varHover);
+      const varText = (varHover.contents[0] as vscode.MarkdownString).value;
+      assert.ok(varText.includes('CMake Variable: `CMAKE_CXX_STANDARD`'));
+
+      // 3. Keyword hover
+      const docKeyword = {
+        getWordRangeAtPosition: () => new vscode.Range(0, 0, 0, 6),
+        getText: () => 'PUBLIC'
+      } as any;
+      const kwHover = service.provideHover(docKeyword, new vscode.Position(0, 2));
+      assert.ok(kwHover);
+      const kwText = (kwHover.contents[0] as vscode.MarkdownString).value;
+      assert.ok(kwText.includes('CMake Scope/Keyword: `PUBLIC`'));
+
+      // 4. Unknown identifier returns null
+      const docUnknown = {
+        getWordRangeAtPosition: () => new vscode.Range(0, 0, 0, 7),
+        getText: () => 'unknown_id'
+      } as any;
+      const unknownHover = service.provideHover(docUnknown, new vscode.Position(0, 2));
+      assert.strictEqual(unknownHover, null);
+
+      service.dispose();
+    });
+  });
+
+  describe('ProjectBuildController', () => {
+    it('should handle build execution and target launcher triggers', async () => {
+      const cmakeLists = path.join(tempDir, 'CMakeLists.txt');
+      fs.writeFileSync(cmakeLists, 'cmake_minimum_required(VERSION 3.20)\nproject(BuildTest)\n', 'utf8');
+
+      const detector = new CompilerDetector();
+      const extractor = new SystemIncludeExtractor();
+      const cmakeManager = new CMakeManager(detector, extractor);
+      const buildController = new ProjectBuildController(cmakeManager, null);
+
+      // Verify controller initial state
+      assert.ok(buildController.getProblemMatcher());
+
+      // Mock runProcess to simulate successful build
+      (buildController as any).runProcess = async () => true;
+
+      const buildOk = await buildController.buildProject(tempDir);
+      assert.strictEqual(buildOk, true);
+
+      // Verify buildAndRunProject and buildAndDebugProject flow without throwing
+      await buildController.buildAndRunProject(tempDir);
+      await buildController.buildAndDebugProject(tempDir);
+
+      buildController.dispose();
+      cmakeManager.dispose();
     });
   });
 });

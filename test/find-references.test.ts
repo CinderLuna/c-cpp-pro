@@ -32,6 +32,7 @@ describe('Find References Integration & Command', () => {
       solutionManager: null,
       profileManager: null,
       cmakeManager: null,
+      projectBuildController: null,
       memoryLayoutInspector: {} as any,
       includeVisualizer: {} as any,
       testController: {} as any,

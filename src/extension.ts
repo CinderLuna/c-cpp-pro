@@ -40,6 +40,8 @@ import { DisassemblyContentProvider } from './compiler/disassembly-view';
 import { HierarchyGraphManager } from './hierarchy/hierarchy-graph';
 import { CMakeManager } from './cmake/cmake-manager';
 import { CMakeCodeActionProvider } from './cmake/cmake-modifier';
+import { CMakeLanguageService } from './cmake/cmake-language-service';
+import { ProjectBuildController } from './tasks/project-build-controller';
 import { registerAllCommands } from './commands/command-registry';
 import { CppIncludeDocumentLinkProvider } from './intelligence/document-links';
 
@@ -59,6 +61,8 @@ let solutionManager: SolutionManager | null = null;
 let solutionTaskProvider: SolutionTaskProvider | null = null;
 let profileManager: ProfileManager | null = null;
 let cmakeManager: CMakeManager | null = null;
+let projectBuildController: ProjectBuildController | null = null;
+let cmakeLanguageService: CMakeLanguageService | null = null;
 let telemetryOutputChannel: vscode.OutputChannel | null = null;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -162,6 +166,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     solutionManager,
     vscode.tasks.registerTaskProvider(SolutionTaskProvider.taskType, solutionTaskProvider)
   );
+
+  // Initialize CMake Language IntelliSense & Project Build Controller
+  cmakeLanguageService = new CMakeLanguageService();
+  cmakeLanguageService.registerProviders();
+  context.subscriptions.push(cmakeLanguageService);
+
+  projectBuildController = new ProjectBuildController(cmakeManager, solutionManager);
+  context.subscriptions.push(projectBuildController);
 
   // Register Language Model Tool (#cpp) for Copilot Chat
   if (typeof (vscode as any).lm?.registerTool === 'function') {
@@ -272,6 +284,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       solutionManager,
       profileManager,
       cmakeManager,
+      projectBuildController,
       memoryLayoutInspector,
       includeVisualizer,
       testController,
@@ -313,6 +326,14 @@ export async function deactivate(): Promise<void> {
   if (cmakeManager) {
     cmakeManager.dispose();
     cmakeManager = null;
+  }
+  if (projectBuildController) {
+    projectBuildController.dispose();
+    projectBuildController = null;
+  }
+  if (cmakeLanguageService) {
+    cmakeLanguageService.dispose();
+    cmakeLanguageService = null;
   }
   if (batchDispatcher) {
     await batchDispatcher.flushNow();

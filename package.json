@@ -2,7 +2,7 @@
   "name": "c-cpp-pro",
   "displayName": "C/C++ Pro",
   "description": "High-performance C/C++ language support, debugging, and tooling for Visual Studio Code",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "publisher": "FunToHard",
   "icon": "media/icon.png",
   "engines": {
@@ -26,6 +26,7 @@
     "onLanguage:c",
     "onLanguage:cpp",
     "onLanguage:cuda-cpp",
+    "onLanguage:cmake",
     "onCommand:c-cpp-pro.openSettings",
     "onCommand:c-cpp-pro.restartServer",
     "onCommand:c-cpp-pro.switchSourceHeader",
@@ -297,6 +298,24 @@
         "command": "c-cpp-pro.flushTelemetry",
         "title": "C/C++ Pro: Flush Telemetry Batch",
         "category": "C/C++"
+      },
+      {
+        "command": "c-cpp-pro.buildProject",
+        "title": "C/C++ Pro: Build Project",
+        "icon": "$(tools)",
+        "category": "C/C++"
+      },
+      {
+        "command": "c-cpp-pro.buildAndRunProject",
+        "title": "C/C++ Pro: Build & Run Project",
+        "icon": "$(play)",
+        "category": "C/C++"
+      },
+      {
+        "command": "c-cpp-pro.buildAndDebugProject",
+        "title": "C/C++ Pro: Build & Debug Project",
+        "icon": "$(debug-alt)",
+        "category": "C/C++"
       }
     ],
     "menus": {
@@ -310,6 +329,21 @@
           "command": "c-cpp-pro.debugFile",
           "when": "editorLangId == cpp || editorLangId == c",
           "group": "navigation@2"
+        },
+        {
+          "command": "c-cpp-pro.buildAndRunProject",
+          "when": "editorLangId == cmake || resourceFilename =~ /CMakeLists\\.txt$/ || resourceExtname == .cmake || resourceExtname == .sln || resourceExtname == .slnx || resourceExtname == .vcxproj",
+          "group": "navigation@1"
+        },
+        {
+          "command": "c-cpp-pro.buildProject",
+          "when": "editorLangId == cmake || resourceFilename =~ /CMakeLists\\.txt$/ || resourceExtname == .cmake || resourceExtname == .sln || resourceExtname == .slnx || resourceExtname == .vcxproj",
+          "group": "navigation@2"
+        },
+        {
+          "command": "c-cpp-pro.buildAndDebugProject",
+          "when": "editorLangId == cmake || resourceFilename =~ /CMakeLists\\.txt$/ || resourceExtname == .cmake || resourceExtname == .sln || resourceExtname == .slnx || resourceExtname == .vcxproj",
+          "group": "navigation@3"
         }
       ],
       "editor/context": [

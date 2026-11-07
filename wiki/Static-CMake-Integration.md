@@ -68,11 +68,36 @@ When creating new `.cpp` or `.h` files:
 
 ---
 
-## 7. CMake Commands Reference
+## 7. CMakeLists.txt Language IntelliSense
+
+C/C++ Pro provides native offline language intelligence for `CMakeLists.txt` and `*.cmake` files:
+- **Autocompletion**:
+  - Over 130 CMake commands with parameter snippets (`add_executable`, `target_include_directories`, `target_link_libraries`, `find_package`, etc.).
+  - Over 1,300 built-in CMake variables (`CMAKE_CXX_STANDARD`, `CMAKE_BUILD_TYPE`, `CMAKE_CURRENT_SOURCE_DIR`, `BUILD_SHARED_LIBS`, etc.).
+  - Scoping keywords: `PUBLIC`, `PRIVATE`, `INTERFACE`, `REQUIRED`, `COMPONENTS`, `STATIC`, `SHARED`, `MODULE`, `CONFIG`, `WIN32`.
+- **Hover Documentation**:
+  - Hovering over commands displays command signatures, parameter descriptions, and official syntax examples.
+  - Hovering over variables displays their purpose, default values, and valid settings.
+
+---
+
+## 8. Editor Run Button Options for Project Files
+
+When a project file is focused in the editor (`CMakeLists.txt`, `*.cmake`, `.sln`, `.slnx`, `.vcxproj`), the Run button in the top-right editor title bar provides one-click project actions:
+- **Build & Run Project** (`c-cpp-pro.buildAndRunProject`): Automatically builds the project and launches the active target binary in the integrated terminal.
+- **Build Project** (`c-cpp-pro.buildProject`): Configures and runs `cmake --build` (or MSBuild for solutions) with real-time error streaming into the Problems tab.
+- **Build & Debug Project** (`c-cpp-pro.buildAndDebugProject`): Automatically builds the project and attaches C/C++ Pro's DAP debugger (`lldb-dap`, `cppvsdbg`, or `gdb`).
+
+---
+
+## 9. CMake Commands Reference
 
 | Command | Identifier | Action |
 | :--- | :--- | :--- |
 | **CMake Intelligence Menu** | `c-cpp-pro.cmake.menu` | Opens a quick-pick popup with all CMake actions, targets, and presets. |
+| **Build Project** | `c-cpp-pro.buildProject` | Configure and compile the entire project. |
+| **Build & Run Project** | `c-cpp-pro.buildAndRunProject` | Build the project and run the active executable target. |
+| **Build & Debug Project** | `c-cpp-pro.buildAndDebugProject` | Build the project and attach the debugger to the active target. |
 | **Select Configure Preset** | `c-cpp-pro.cmake.selectConfigurePreset` | Switch active configure preset from `CMakePresets.json`. |
 | **Select Build Preset** | `c-cpp-pro.cmake.selectBuildPreset` | Switch active build preset from `CMakePresets.json`. |
 | **Select Launch Target** | `c-cpp-pro.cmake.selectLaunchTarget` | Switch the active executable target for run and debug. |

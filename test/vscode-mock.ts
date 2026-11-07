@@ -562,6 +562,9 @@ export const mockVscode: any = {
       (mockVscode.window as any).lastWarningMessage = msg;
       return undefined;
     },
+    setStatusBarMessage: (_text: string, _hideAfterTimeout?: any) => ({
+      dispose: () => {}
+    }),
     withProgress: async (_options: any, task: any) => {
       return task({ report: () => {} }, { onCancellationRequested: () => {} });
     },
@@ -734,6 +737,12 @@ export const mockVscode: any = {
       onDidDelete: () => ({ dispose: () => {} }),
       dispose: () => {}
     }),
+    getWorkspaceFolder: (uri: any) => {
+      const fsPath = uri?.fsPath || uri?.path || String(uri);
+      return (mockVscode.workspace.workspaceFolders || []).find((f: any) =>
+        fsPath.startsWith(f.uri.fsPath)
+      ) || mockVscode.workspace.workspaceFolders?.[0];
+    },
     onDidCloseTextDocument: () => ({ dispose: () => {} }),
     onDidOpenTextDocument: () => ({ dispose: () => {} }),
     onDidChangeTextDocument: () => ({ dispose: () => {} }),
