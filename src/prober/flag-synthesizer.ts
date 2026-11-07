@@ -111,9 +111,19 @@ export class FlagSynthesizer {
     }
 
     if (options.detectExternalSdks !== false) {
+      const preferredCompiler =
+        compiler.type === 'gcc' || compiler.type === 'wsl-gcc'
+          ? 'mingw'
+          : compiler.type === 'msvc'
+          ? 'msvc'
+          : compiler.type;
+      const sdkOpts = {
+        workspaceRoot: options.workspaceRoot,
+        preferredCompiler
+      };
       const sdkIncludes = options.workspaceRoot
-        ? ExternalSdkDetector.getWorkspaceIncludePaths(options.workspaceRoot)
-        : ExternalSdkDetector.getAllIncludePaths();
+        ? ExternalSdkDetector.getWorkspaceIncludePaths(options.workspaceRoot, sdkOpts)
+        : ExternalSdkDetector.getAllIncludePaths(sdkOpts);
       for (const inc of sdkIncludes) {
         const flag = `-I${inc.replace(/\\/g, '/')}`;
         if (!flags.includes(flag)) {

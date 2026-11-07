@@ -27,7 +27,10 @@ export class CompilationDatabaseGenerator {
       (solution.configurations.length > 0 ? solution.configurations[0].key : 'Debug|x64');
 
     const solutionDir = path.dirname(solution.filePath);
-    const externalSdkIncludes = ExternalSdkDetector.getWorkspaceIncludePaths(solutionDir);
+    const externalSdkIncludes = ExternalSdkDetector.getWorkspaceIncludePaths(solutionDir, {
+      workspaceRoot: solutionDir,
+      preferredCompiler: compiler.type === 'msvc' ? 'msvc' : compiler.type
+    });
 
     for (const project of projects) {
       const projectDir = isWslCompiler(compiler)

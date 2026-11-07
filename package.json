@@ -427,7 +427,12 @@
         "c-cpp-pro.discovery.detectExternalSdks": {
           "type": "boolean",
           "default": true,
-          "description": "Auto-detect common external SDKs (Vulkan SDK, raylib, CUDA Toolkit, Boost, SDL) for fallback IntelliSense flags and flag synthesis."
+          "description": "Auto-detect common external SDKs (Qt, Vulkan SDK, raylib, CUDA Toolkit, Boost, SDL) for fallback IntelliSense flags and flag synthesis."
+        },
+        "c-cpp-pro.discovery.qtToolchain": {
+          "type": "string",
+          "default": "",
+          "description": "Preferred Qt toolchain kit subfolder (e.g. 'mingw_64', 'msvc2022_64', 'gcc_64'). If empty, automatically selects the best matching desktop toolchain based on the active compiler."
         },
         "c-cpp-pro.default.forcedInclude": {
           "type": "array",

@@ -55,8 +55,20 @@ C/C++ Pro automatically detects common system and graphics SDKs. To avoid flag p
 | **CUDA Toolkit** | `CUDA_PATH` | `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*`, `/usr/local/cuda` |
 | **Boost C++** | `BOOST_ROOT`, `BOOST_DIR` | `C:\local\boost_*`, `/usr/include/boost`, Homebrew paths |
 | **SDL2 / SDL3** | `SDL2_DIR`, `SDL3_DIR` | `C:\SDL*`, `/usr/include/SDL2`, `/usr/local/include/SDL2` |
+| **Qt Framework** | `QTDIR`, `Qt6_DIR`, `Qt5_DIR`, `CMAKE_PREFIX_PATH` | `C:\Qt\<version>\<toolchain>`, `D:\Qt`, `/usr/include/qt6`, `/usr/include/qt5`, Homebrew |
 | **Node-API** | — | Automatic inspection of `package.json` for `node-addon-api` or `nan` |
 | **vcpkg** | `VCPKG_ROOT` | Automatic detection of active vcpkg installed directories |
+
+### Intelligent Qt Toolchain Prioritization
+When multiple Qt toolchains are installed (e.g. `android_arm64_v8a`, `mingw_64`, `msvc2022_64`):
+- **Desktop Priority**: Cross-compilation kits (`android_*`, `wasm_*`, `ios`, `qnx_*`) are automatically deprioritized for desktop projects, ensuring desktop MinGW or MSVC headers are selected.
+- **Compiler Affinity**: The toolchain matching your active compiler (MinGW/GCC vs MSVC) is automatically preferred based on workspace build files (`CMakeCache.txt`, `.sln`, `Makefile`) or system `PATH`.
+- **Explicit Override**: You can explicitly select a specific Qt kit in settings:
+  ```json
+  {
+    "c-cpp-pro.discovery.qtToolchain": "mingw_64"
+  }
+  ```
 
 ### Customizing SDK Probing
 SDK auto-detection can be toggled in your VS Code settings:
@@ -90,3 +102,4 @@ C/C++ Pro manages this environment automatically:
 | `c-cpp-pro.cStandard` | `string` | `"c17"` | Default C standard for flag synthesis (`c89` through `c23`). |
 | `c-cpp-pro.default.forcedInclude` | `array` | `[]` | Headers to force-include before compilation (`/FI` on MSVC, `-include` on GCC/Clang). |
 | `c-cpp-pro.discovery.detectExternalSdks` | `boolean` | `true` | Auto-detect common external SDKs for IntelliSense fallback flags. |
+| `c-cpp-pro.discovery.qtToolchain` | `string` | `""` | Preferred Qt toolchain kit subfolder (e.g. 'mingw_64', 'msvc2022_64', 'gcc_64'). Auto-detects if empty. |
