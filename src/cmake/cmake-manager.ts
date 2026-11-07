@@ -385,8 +385,19 @@ export class CMakeManager implements vscode.Disposable {
 
     if (entries.length > 0) {
       try {
+        const jsonContent = JSON.stringify(entries, null, 2);
+        if (fs.existsSync(targetFile)) {
+          try {
+            const existing = await fs.promises.readFile(targetFile, 'utf8');
+            if (existing === jsonContent) {
+              return targetFile;
+            }
+          } catch {
+            // Read failed, proceed to write
+          }
+        }
         await fs.promises.mkdir(path.dirname(targetFile), { recursive: true });
-        await fs.promises.writeFile(targetFile, JSON.stringify(entries, null, 2), 'utf8');
+        await fs.promises.writeFile(targetFile, jsonContent, 'utf8');
         console.log(`C/C++ Pro: Statically generated compilation database with ${entries.length} files from CMakeLists.txt`);
         return targetFile;
       } catch (err) {

@@ -178,6 +178,15 @@ export class ParameterInformation {
   constructor(public label: string | [number, number], public documentation?: any) {}
 }
 
+export class SemanticTokens {
+  constructor(public readonly data: Uint32Array, public readonly resultId?: string) {}
+}
+
+export class SemanticTokensEdits {
+  constructor(public readonly edits: any[], public readonly resultId?: string) {}
+}
+
+
 export class TextEdit {
   static replace(range: Range, newText: string): TextEdit {
     return new TextEdit(range, newText);
@@ -562,6 +571,9 @@ export const mockVscode: any = {
       (mockVscode.window as any).lastWarningMessage = msg;
       return undefined;
     },
+    setStatusBarMessage: (_text: string, _hideAfterTimeout?: any) => ({
+      dispose: () => {}
+    }),
     withProgress: async (_options: any, task: any) => {
       return task({ report: () => {} }, { onCancellationRequested: () => {} });
     },
@@ -734,6 +746,12 @@ export const mockVscode: any = {
       onDidDelete: () => ({ dispose: () => {} }),
       dispose: () => {}
     }),
+    getWorkspaceFolder: (uri: any) => {
+      const fsPath = uri?.fsPath || uri?.path || String(uri);
+      return (mockVscode.workspace.workspaceFolders || []).find((f: any) =>
+        fsPath.startsWith(f.uri.fsPath)
+      ) || mockVscode.workspace.workspaceFolders?.[0];
+    },
     onDidCloseTextDocument: () => ({ dispose: () => {} }),
     onDidOpenTextDocument: () => ({ dispose: () => {} }),
     onDidChangeTextDocument: () => ({ dispose: () => {} }),
@@ -840,7 +858,9 @@ export const mockVscode: any = {
     Coverage: 3
   },
   EvaluatableExpression,
-  SnippetTextEdit
+  SnippetTextEdit,
+  SemanticTokens,
+  SemanticTokensEdits
 };
 
 const originalRequire = (Module.prototype as any).require;

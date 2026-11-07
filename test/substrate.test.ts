@@ -1,10 +1,13 @@
 import './vscode-mock';
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as path from 'path';
 import { DaemonManager, defaultClangdArguments } from '../src/substrate/daemon-manager';
 import {
   createClangdMiddleware,
   debounce,
-  enrichCompletionItemWithStl
+  enrichCompletionItemWithStl,
+  isConnectionOrStreamError
 } from '../src/substrate/protocol-filter';
 import { mockVscode } from './vscode-mock';
 
@@ -211,5 +214,118 @@ describe('Language Server Substrate & Clangd Configuration', () => {
       manager.dispose();
     });
   });
+
+  describe('Stream Lifecycle and Error Resilience', () => {
+    it('should identify destroyed stream and connection drop errors', () => {
+      assert.strictEqual(
+        isConnectionOrStreamError(new Error('Cannot call write after a stream was destroyed')),
+        true
+      );
+      assert.strictEqual(
+        isConnectionOrStreamError({ code: -32099, message: 'Request textDocument/semanticTokens/full failed' }),
+        true
+      );
+      assert.strictEqual(
+        isConnectionOrStreamError(new Error('Connection got disposed.')),
+        true
+      );
+      assert.strictEqual(
+        isConnectionOrStreamError(new Error('Language client is not running')),
+        true
+      );
+      assert.strictEqual(
+        isConnectionOrStreamError({ code: 'ERR_STREAM_DESTROYED' }),
+        true
+      );
+      assert.strictEqual(
+        isConnectionOrStreamError(new Error('Syntax error in C++ file')),
+        false
+      );
+    });
+
+    it('should suppress semantic tokens errors and return null when stream was destroyed', async () => {
+      const middleware = createClangdMiddleware();
+      const doc: any = { uri: 'file:///main.cpp' };
+      const token: any = { isCancellationRequested: false };
+
+      const throwingNext = async () => {
+        const err: any = new Error('Cannot call write after a stream was destroyed');
+        err.code = -32099;
+        throw err;
+      };
+
+      const result = await (middleware as any).provideDocumentSemanticTokens(doc, token, throwingNext);
+      assert.strictEqual(result, null);
+    });
+
+    it('should immediately return null for semantic tokens when server is not ready', async () => {
+      let isReady = false;
+      const middleware = createClangdMiddleware(undefined, () => isReady);
+      const doc: any = { uri: 'file:///main.cpp' };
+      const token: any = { isCancellationRequested: false };
+
+      let nextCalled = false;
+      const next = async () => {
+        nextCalled = true;
+        return { data: new Uint32Array(0) };
+      };
+
+      const result = await (middleware as any).provideDocumentSemanticTokens(doc, token, next);
+      assert.strictEqual(result, null);
+      assert.strictEqual(nextCalled, false, 'next must not be invoked when server is not ready');
+
+      isReady = true;
+      const readyResult = await (middleware as any).provideDocumentSemanticTokens(doc, token, next);
+      assert.ok(readyResult);
+      assert.strictEqual(nextCalled, true);
+    });
+
+    it('should suppress completion stream errors and return empty array', async () => {
+      const middleware = createClangdMiddleware();
+      const doc: any = { uri: 'file:///main.cpp' };
+      const pos = new mockVscode.Position(0, 0);
+      const token: any = { isCancellationRequested: false };
+
+      const throwingNext = async () => {
+        const err: any = new Error('Cannot call write after a stream was destroyed');
+        err.code = -32099;
+        throw err;
+      };
+
+      const result = await (middleware as any).provideCompletionItem(doc, pos, {}, token, throwingNext);
+      assert.deepStrictEqual(result, []);
+    });
+  });
+
+  describe('CMake Syntax Contributions', () => {
+    it('should have CMake and CMakeCache grammars and configurations present on disk', () => {
+      const rootDir = path.resolve(__dirname, '..');
+      const cmakeGrammar = path.join(rootDir, 'syntaxes', 'CMake.tmLanguage.json');
+      const cmakeCacheGrammar = path.join(rootDir, 'syntaxes', 'CMakeCache.tmLanguage.json');
+      const cmakeLangConfig = path.join(rootDir, 'syntaxes', 'cmake-language-configuration.json');
+
+      assert.ok(fs.existsSync(cmakeGrammar), 'CMake.tmLanguage.json must exist');
+      assert.ok(fs.existsSync(cmakeCacheGrammar), 'CMakeCache.tmLanguage.json must exist');
+      assert.ok(fs.existsSync(cmakeLangConfig), 'cmake-language-configuration.json must exist');
+    });
+
+    it('should register cmake language and grammars in package.json', () => {
+      const rootDir = path.resolve(__dirname, '..');
+      const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
+
+      const languages = pkg.contributes?.languages ?? [];
+      const cmakeLang = languages.find((l: any) => l.id === 'cmake');
+      assert.ok(cmakeLang, 'cmake language must be registered');
+      assert.ok(cmakeLang.extensions.includes('.cmake'), '.cmake extension must be included');
+      assert.ok(cmakeLang.filenames.includes('CMakeLists.txt'), 'CMakeLists.txt must be included');
+
+      const grammars = pkg.contributes?.grammars ?? [];
+      const cmakeGrammar = grammars.find((g: any) => g.language === 'cmake');
+      assert.ok(cmakeGrammar, 'cmake grammar must be registered');
+      assert.strictEqual(cmakeGrammar.scopeName, 'source.cmake');
+      assert.strictEqual(cmakeGrammar.path, './syntaxes/CMake.tmLanguage.json');
+    });
+  });
 });
+
 

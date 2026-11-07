@@ -12,7 +12,7 @@ import {
   ErrorAction
 } from 'vscode-languageclient/node';
 import { ClangdInstaller } from './installer';
-import { createClangdMiddleware, debounce } from './protocol-filter';
+import { createClangdMiddleware, debounce, isConnectionOrStreamError } from './protocol-filter';
 import { StlRankingTable } from '../telemetry/ranking-table';
 import { ExternalSdkDetector } from '../prober/external-sdk-detector';
 import { CMakeParser } from '../cmake/cmake-parser';
@@ -251,9 +251,13 @@ export class DaemonManager implements vscode.Disposable {
         return false;
       },
       outputChannel: this.outputChannel,
-      middleware: createClangdMiddleware(this.rankingTable),
+      middleware: createClangdMiddleware(this.rankingTable, () => this.isServerReady()),
       errorHandler: {
         error: (error, _message, count) => {
+          if (isConnectionOrStreamError(error)) {
+            this.outputChannel.appendLine(`[Suppressed Stream Error] ${error.message}`);
+            return { action: ErrorAction.Continue, handled: true };
+          }
           this.outputChannel.appendLine(`[Error] ${error.message} (${count})`);
           return { action: ErrorAction.Continue, handled: true };
         },
@@ -464,6 +468,10 @@ export class DaemonManager implements vscode.Disposable {
 
   public getClient(): LanguageClient | null {
     return this.client;
+  }
+
+  public isServerReady(): boolean {
+    return this.client !== null && this.client.isRunning() && !this.isStopping && !this.isRestarting;
   }
 
   dispose(): void {

@@ -27,6 +27,7 @@ import { VsEnvironmentManager } from '../tasks/vs-environment-manager';
 import { ProcessPicker } from '../debugger/process-picker';
 import { ProjectCreator } from '../project/project-creator';
 import { CMakeListsModifier } from '../cmake/cmake-modifier';
+import { ProjectBuildController } from '../tasks/project-build-controller';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -43,6 +44,7 @@ export interface CommandRegistryContext {
   solutionManager: SolutionManager | null;
   profileManager: ProfileManager | null;
   cmakeManager: CMakeManager | null;
+  projectBuildController: ProjectBuildController | null;
   memoryLayoutInspector: MemoryLayoutInspector;
   includeVisualizer: IncludeVisualizerManager;
   testController: CppTestController;
@@ -69,6 +71,7 @@ export function registerAllCommands(ctx: CommandRegistryContext): vscode.Disposa
     solutionManager,
     profileManager,
     cmakeManager,
+    projectBuildController,
     memoryLayoutInspector,
     includeVisualizer,
     testController,
@@ -442,6 +445,15 @@ export function registerAllCommands(ctx: CommandRegistryContext): vscode.Disposa
       } catch (err: any) {
         vscode.window.showErrorMessage(`Failed to update CMakeLists.txt: ${err.message}`);
       }
+    }),
+    vscode.commands.registerCommand('c-cpp-pro.buildProject', async () => {
+      await projectBuildController?.buildProject();
+    }),
+    vscode.commands.registerCommand('c-cpp-pro.buildAndRunProject', async () => {
+      await projectBuildController?.buildAndRunProject();
+    }),
+    vscode.commands.registerCommand('c-cpp-pro.buildAndDebugProject', async () => {
+      await projectBuildController?.buildAndDebugProject();
     })
   ];
 }
