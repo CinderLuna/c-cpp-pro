@@ -7,6 +7,7 @@ import {
   ExternalSdkDetector,
   compareSemverDesc,
   detectCompilerPreference,
+  detectTargetPlatform,
   scoreQtToolchain
 } from '../src/prober/external-sdk-detector';
 import { FlagSynthesizer } from '../src/prober/flag-synthesizer';
@@ -363,6 +364,88 @@ describe('External SDKs Auto-Discovery Subsystem', () => {
       assert.ok(
         updatedClangd.includes('mingw_64'),
         'Desktop mingw_64 flag was not added to .clangd'
+      );
+    });
+
+    it('should automatically detect Android targetPlatform when AndroidManifest.xml exists', () => {
+      const wsDir = path.join(tempDir, 'QtAndroidWs');
+      fs.mkdirSync(path.join(wsDir, 'android'), { recursive: true });
+      fs.writeFileSync(
+        path.join(wsDir, 'android', 'AndroidManifest.xml'),
+        '<manifest package="org.qtproject.example"></manifest>'
+      );
+
+      const platform = detectTargetPlatform({ workspaceRoot: wsDir });
+      assert.strictEqual(platform, 'android');
+    });
+
+    it('should automatically detect Android targetPlatform from CMakeLists.txt setting CMAKE_SYSTEM_NAME Android', () => {
+      const wsDir = path.join(tempDir, 'QtAndroidCMakeWs');
+      fs.mkdirSync(wsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(wsDir, 'CMakeLists.txt'),
+        'cmake_minimum_required(VERSION 3.22)\nset(CMAKE_SYSTEM_NAME Android)\nfind_package(Qt6 REQUIRED COMPONENTS Core)\n'
+      );
+
+      const platform = detectTargetPlatform({ workspaceRoot: wsDir });
+      assert.strictEqual(platform, 'android');
+    });
+
+    it('should select android_arm64_v8a when developing an Android Qt project', () => {
+      const wsDir = path.join(tempDir, 'QtAndroidAppProject');
+      const qtBase = path.join(tempDir, 'QtAndroidInstall');
+      const verDir = path.join(qtBase, '6.8.0');
+
+      // Both desktop and android are installed
+      const mingwInc = path.join(verDir, 'mingw_64', 'include', 'QtCore');
+      fs.mkdirSync(mingwInc, { recursive: true });
+      fs.writeFileSync(path.join(mingwInc, 'qstring.h'), '// mingw');
+
+      const androidInc = path.join(verDir, 'android_arm64_v8a', 'include', 'QtCore');
+      fs.mkdirSync(androidInc, { recursive: true });
+      fs.writeFileSync(path.join(androidInc, 'qstring.h'), '// android');
+
+      // Project has AndroidManifest.xml
+      fs.mkdirSync(wsDir, { recursive: true });
+      fs.writeFileSync(path.join(wsDir, 'AndroidManifest.xml'), '<manifest></manifest>');
+
+      const result = ExternalSdkDetector.detectQt({
+        workspaceRoot: wsDir,
+        qtInstallDir: qtBase,
+        allowFsScan: true
+      });
+
+      assert.ok(result);
+      assert.strictEqual(result.name, 'Qt');
+      assert.ok(
+        result.rootPath.includes('android_arm64_v8a'),
+        `Expected android_arm64_v8a for Android project, got: ${result.rootPath}`
+      );
+    });
+
+    it('should respect explicit preferredToolchain=android_arm64_v8a override even on desktop', () => {
+      const qtBase = path.join(tempDir, 'QtExplicitAndroid');
+      const verDir = path.join(qtBase, '6.8.0');
+
+      const mingwInc = path.join(verDir, 'mingw_64', 'include', 'QtCore');
+      fs.mkdirSync(mingwInc, { recursive: true });
+      fs.writeFileSync(path.join(mingwInc, 'qstring.h'), '// mingw');
+
+      const androidInc = path.join(verDir, 'android_arm64_v8a', 'include', 'QtCore');
+      fs.mkdirSync(androidInc, { recursive: true });
+      fs.writeFileSync(path.join(androidInc, 'qstring.h'), '// android');
+
+      const result = ExternalSdkDetector.detectQt({
+        preferredToolchain: 'android_arm64_v8a',
+        qtInstallDir: qtBase,
+        allowFsScan: true
+      });
+
+      assert.ok(result);
+      assert.strictEqual(result.name, 'Qt');
+      assert.ok(
+        result.rootPath.includes('android_arm64_v8a'),
+        `Expected explicit android_arm64_v8a to win, got: ${result.rootPath}`
       );
     });
   });

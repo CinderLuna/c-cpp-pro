@@ -141,38 +141,159 @@ export function detectCompilerPreference(
 }
 
 /**
+ * Detects target operating platform ('desktop', 'android', 'wasm', or 'ios') from options,
+ * environment variables, or workspace indicator files (AndroidManifest.xml, CMakeLists.txt, .pro).
+ */
+export function detectTargetPlatform(
+  options: ExternalSdkDetectorOptions = {}
+): 'desktop' | 'android' | 'wasm' | 'ios' | string {
+  if (options.targetPlatform) {
+    return options.targetPlatform.toLowerCase();
+  }
+
+  const env = options.env ?? process.env;
+
+  // 1. Check explicit toolchain override
+  const explicitTc = (options.preferredToolchain || env.QT_TOOLCHAIN || env.QT_KIT || '').toLowerCase();
+  if (explicitTc.startsWith('android')) return 'android';
+  if (explicitTc.startsWith('wasm')) return 'wasm';
+  if (explicitTc.startsWith('ios')) return 'ios';
+
+  // 2. Check Android environment variables
+  if (env.ANDROID_ABI || env.ANDROID_PLATFORM || env.ANDROID_TARGET_ARCH) return 'android';
+
+  // 3. Inspect workspaceRoot if available
+  const wsRoot = options.workspaceRoot;
+  if (wsRoot) {
+    try {
+      // Direct AndroidManifest.xml presence
+      if (
+        fs.existsSync(path.join(wsRoot, 'AndroidManifest.xml')) ||
+        fs.existsSync(path.join(wsRoot, 'android', 'AndroidManifest.xml'))
+      ) {
+        return 'android';
+      }
+
+      // CMakeCache.txt check
+      const cmakeCacheCandidates = [
+        path.join(wsRoot, 'CMakeCache.txt'),
+        path.join(wsRoot, 'build', 'CMakeCache.txt'),
+        path.join(wsRoot, 'out', 'CMakeCache.txt')
+      ];
+      for (const cacheFile of cmakeCacheCandidates) {
+        if (fs.existsSync(cacheFile)) {
+          const content = fs.readFileSync(cacheFile, 'utf8');
+          if (
+            /CMAKE_SYSTEM_NAME:STRING=Android/i.test(content) ||
+            /ANDROID_ABI:STRING=/i.test(content) ||
+            /ANDROID_NDK:PATH=/i.test(content)
+          ) {
+            return 'android';
+          }
+          if (/CMAKE_SYSTEM_NAME:STRING=Emscripten/i.test(content)) {
+            return 'wasm';
+          }
+          if (/CMAKE_SYSTEM_NAME:STRING=iOS/i.test(content)) {
+            return 'ios';
+          }
+        }
+      }
+
+      // CMakeLists.txt check
+      const cmakeLists = path.join(wsRoot, 'CMakeLists.txt');
+      if (fs.existsSync(cmakeLists)) {
+        const content = fs.readFileSync(cmakeLists, 'utf8');
+        if (
+          /set\s*\(\s*CMAKE_SYSTEM_NAME\s+Android\s*\)/i.test(content) ||
+          /ANDROID_PACKAGE_SOURCE_DIR/i.test(content) ||
+          /qt_android_/i.test(content)
+        ) {
+          return 'android';
+        }
+      }
+
+      // .pro / .pri project files
+      const rootFiles = fs.readdirSync(wsRoot);
+      for (const file of rootFiles) {
+        if (file.endsWith('.pro') || file.endsWith('.pri')) {
+          const content = fs.readFileSync(path.join(wsRoot, file), 'utf8');
+          if (
+            /ANDROID_PACKAGE_SOURCE_DIR/i.test(content) ||
+            /contains\s*\(\s*ANDROID_TARGET_ARCH/i.test(content) ||
+            /android\s*\{/i.test(content)
+          ) {
+            return 'android';
+          }
+        }
+      }
+    } catch {
+      // Ignore filesystem inspection errors
+    }
+  }
+
+  return 'desktop';
+}
+
+/**
  * Computes a suitability score for a Qt toolchain kit directory name.
- * Heavily penalizes cross-compilation / mobile / web toolchains (android, wasm, ios, qnx)
- * during desktop development to ensure desktop kits (mingw, msvc, gcc, clang) are preferred.
+ * If the project targets Android (or another cross-target), matching toolchains receive top priority.
+ * If developing a desktop project, cross-compilation toolchains (android, wasm, ios, qnx) receive a severe
+ * penalty to ensure desktop kits (mingw, msvc, gcc, clang) are preferred.
  */
 export function scoreQtToolchain(
   tcName: string,
   options: ExternalSdkDetectorOptions = {}
 ): number {
   const lower = tcName.toLowerCase();
+  const env = options.env ?? process.env;
 
-  // 1. Cross-compilation / mobile / embedded target detection
-  const isCrossTarget = /^(?:android|wasm|ios|qnx|integrity|winrt)/i.test(lower);
-  const targetPlatform = options.targetPlatform?.toLowerCase();
-  const wantCross = Boolean(
-    targetPlatform &&
-    targetPlatform !== 'desktop' &&
-    lower.startsWith(targetPlatform)
-  );
-
-  if (isCrossTarget && !wantCross) {
-    // Severe penalty: mobile/embedded cross-compilation toolchains should never be selected for desktop projects
-    return -100_000;
+  // 1. Explicit toolchain match has the absolute highest priority
+  const explicitTc = (options.preferredToolchain || env.QT_TOOLCHAIN || env.QT_KIT || '').toLowerCase();
+  if (explicitTc && lower.includes(explicitTc)) {
+    return 100_000;
   }
-  if (wantCross) {
+
+  // 2. Detect target platform (desktop vs android vs wasm vs ios)
+  const targetPlatform = detectTargetPlatform(options);
+  const isCrossTarget = /^(?:android|wasm|ios|qnx|integrity|winrt)/i.test(lower);
+
+  if (targetPlatform === 'android') {
+    if (!lower.startsWith('android')) {
+      // When targeting Android, non-Android toolchains should not be selected
+      return -100_000;
+    }
+    let androidScore = 50_000;
+
+    // ABI matching
+    const prefAbi = (env.ANDROID_ABI || options.preferredArch || '').toLowerCase();
+    if (prefAbi) {
+      const cleanAbi = prefAbi.replace(/[-_]/g, '');
+      const cleanTc = lower.replace(/[-_]/g, '');
+      if (cleanTc.includes(cleanAbi)) {
+        androidScore += 20_000;
+      }
+    } else {
+      // Default Android ABI preference: 64-bit ARM first, then 64-bit x86 emulator, then 32-bit
+      if (lower.includes('arm64_v8a')) androidScore += 10_000;
+      else if (lower.includes('x86_64')) androidScore += 8_000;
+      else if (lower.includes('armv7')) androidScore += 5_000;
+    }
+    return androidScore;
+  }
+
+  if (targetPlatform === 'wasm') {
+    if (!lower.startsWith('wasm')) return -100_000;
+    return 50_000 + (lower.includes('multithread') ? 5_000 : 0);
+  }
+
+  if (targetPlatform === 'ios') {
+    if (!lower.startsWith('ios')) return -100_000;
     return 50_000;
   }
 
-  // 2. Explicit toolchain match
-  const env = options.env ?? process.env;
-  const explicitTc = (options.preferredToolchain || env.QT_TOOLCHAIN || env.QT_KIT || '').toLowerCase();
-  if (explicitTc && lower.includes(explicitTc)) {
-    return 80_000;
+  // Desktop platform: penalize cross-compilation toolchains heavily
+  if (isCrossTarget) {
+    return -100_000;
   }
 
   let score = 10_000; // Base score for host desktop toolchains
@@ -916,15 +1037,27 @@ export class ExternalSdkDetector {
         }
 
         if (candidates.length > 0) {
-          // If desktop toolchains exist, eliminate cross-compilation toolchains unless cross-compilation was explicitly requested
-          const wantCross = Boolean(
-            options.targetPlatform &&
-            options.targetPlatform !== 'desktop' &&
-            ['android', 'wasm', 'ios', 'qnx'].includes(options.targetPlatform.toLowerCase())
-          );
-          const validCandidates = (!wantCross && candidates.some((c) => c.isDesktop))
-            ? candidates.filter((c) => c.isDesktop)
-            : candidates;
+          const effectivePlatform = detectTargetPlatform(options);
+          const isExplicit = Boolean(options.preferredToolchain || env.QT_TOOLCHAIN || env.QT_KIT);
+
+          let validCandidates: QtCandidate[];
+          if (isExplicit) {
+            validCandidates = candidates;
+          } else if (effectivePlatform === 'android') {
+            const androidCandidates = candidates.filter((c) => c.toolchain.toLowerCase().startsWith('android'));
+            validCandidates = androidCandidates.length > 0 ? androidCandidates : candidates;
+          } else if (effectivePlatform === 'wasm') {
+            const wasmCandidates = candidates.filter((c) => c.toolchain.toLowerCase().startsWith('wasm'));
+            validCandidates = wasmCandidates.length > 0 ? wasmCandidates : candidates;
+          } else if (effectivePlatform === 'ios') {
+            const iosCandidates = candidates.filter((c) => c.toolchain.toLowerCase().startsWith('ios'));
+            validCandidates = iosCandidates.length > 0 ? iosCandidates : candidates;
+          } else {
+            // Desktop: eliminate cross-compilation toolchains if desktop toolchains exist
+            validCandidates = candidates.some((c) => c.isDesktop)
+              ? candidates.filter((c) => c.isDesktop)
+              : candidates;
+          }
 
           validCandidates.sort((a, b) => {
             if (b.score !== a.score) return b.score - a.score;
