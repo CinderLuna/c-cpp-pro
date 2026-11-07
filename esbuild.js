@@ -2,13 +2,14 @@ const esbuild = require("esbuild");
 
 const args = process.argv.slice(2);
 const isWatch = args.includes("--watch");
-const isProduction = args.includes("--production");
+const isProduction = args.includes("--production") || process.env.NODE_ENV === "production";
 
 /** @type {import('esbuild').BuildOptions} */
 const buildOptions = {
   entryPoints: ["src/extension.ts"],
   bundle: true,
   outfile: "dist/extension.js",
+  // @aws-sdk/client-s3 is an optional dynamic require inside unzipper (dependency of @clangd/install)
   external: ["vscode", "@aws-sdk/client-s3"],
   alias: {
     punycode: require.resolve("punycode/"),

@@ -290,8 +290,8 @@ pub fn parse_cmake_file_internal(
 
     for cmd in commands {
         match cmd.name.as_str() {
-            "set" => {
-                if cmd.args.len() >= 2 {
+            "set"
+                if cmd.args.len() >= 2 => {
                     let var_name = cmd.args[0].clone();
                     let val_joined = cmd.args[1..].join(" ");
                     let resolved_val = resolve_variables(&val_joined, &variables);
@@ -309,37 +309,34 @@ pub fn parse_cmake_file_internal(
                         }
                     }
                 }
-            }
             "include_directories" => {
                 for arg in &cmd.args {
                     add_include(arg, &variables, &current_dir, None, &mut result);
                 }
             }
-            "target_include_directories" => {
-                if cmd.args.len() >= 2 {
+            "target_include_directories"
+                if cmd.args.len() >= 2 => {
                     let target_name = &cmd.args[0];
                     let target_idx = get_or_create_target(target_name, "custom", &mut result.targets);
                     for arg in &cmd.args[1..] {
                         add_include(arg, &variables, &current_dir, Some(target_idx), &mut result);
                     }
                 }
-            }
             "add_definitions" => {
                 for arg in &cmd.args {
                     add_define(arg, &variables, None, &mut result);
                 }
             }
-            "target_compile_definitions" => {
-                if cmd.args.len() >= 2 {
+            "target_compile_definitions"
+                if cmd.args.len() >= 2 => {
                     let target_name = &cmd.args[0];
                     let target_idx = get_or_create_target(target_name, "custom", &mut result.targets);
                     for arg in &cmd.args[1..] {
                         add_define(arg, &variables, Some(target_idx), &mut result);
                     }
                 }
-            }
-            "add_executable" => {
-                if !cmd.args.is_empty() {
+            "add_executable"
+                if !cmd.args.is_empty() => {
                     let target_name = &cmd.args[0];
                     let target_idx = get_or_create_target(target_name, "executable", &mut result.targets);
                     result.targets[target_idx].target_type = "executable".to_string();
@@ -363,9 +360,8 @@ pub fn parse_cmake_file_internal(
                         }
                     }
                 }
-            }
-            "add_library" => {
-                if !cmd.args.is_empty() {
+            "add_library"
+                if !cmd.args.is_empty() => {
                     let target_name = &cmd.args[0];
                     let mut target_type = "library".to_string();
                     let mut src_start = 1;
@@ -415,9 +411,8 @@ pub fn parse_cmake_file_internal(
                         }
                     }
                 }
-            }
-            "target_sources" => {
-                if cmd.args.len() >= 2 {
+            "target_sources"
+                if cmd.args.len() >= 2 => {
                     let target_name = &cmd.args[0];
                     let target_idx = get_or_create_target(target_name, "custom", &mut result.targets);
                     for s in &cmd.args[1..] {
@@ -430,9 +425,8 @@ pub fn parse_cmake_file_internal(
                         result.targets[target_idx].source_files.push(full);
                     }
                 }
-            }
-            "target_link_libraries" => {
-                if cmd.args.len() >= 2 {
+            "target_link_libraries"
+                if cmd.args.len() >= 2 => {
                     let target_name = &cmd.args[0];
                     let target_idx = get_or_create_target(target_name, "custom", &mut result.targets);
                     for arg in &cmd.args[1..] {
@@ -459,9 +453,8 @@ pub fn parse_cmake_file_internal(
                         }
                     }
                 }
-            }
-            "add_subdirectory" => {
-                if !cmd.args.is_empty() {
+            "add_subdirectory"
+                if !cmd.args.is_empty() => {
                     let sub_name = resolve_variables(&cmd.args[0], &variables);
                     result.subdirectories.push(sub_name.clone());
 
@@ -527,9 +520,8 @@ pub fn parse_cmake_file_internal(
                         }
                     }
                 }
-            }
-            "include" => {
-                if !cmd.args.is_empty() {
+            "include"
+                if !cmd.args.is_empty() => {
                     let file_arg = resolve_variables(&cmd.args[0], &variables);
                     let candidates = vec![
                         resolve_path(&current_dir, &file_arg),
@@ -565,7 +557,6 @@ pub fn parse_cmake_file_internal(
                         }
                     }
                 }
-            }
             _ => {}
         }
     }
@@ -580,7 +571,7 @@ pub fn parse_cmake_file_internal(
 }
 
 pub fn resolve_linked_target_properties(
-    targets: &mut Vec<CMakeTargetInfoNative>,
+    targets: &mut [CMakeTargetInfoNative],
     global_includes: &mut Vec<String>,
     global_defs: &mut Vec<String>,
 ) {
@@ -596,7 +587,7 @@ pub fn resolve_linked_target_properties(
                 None => continue,
             };
             for dep_name in deps {
-                if let Some(dep_idx) = targets.iter().position(|t| &t.name == &dep_name) {
+                if let Some(dep_idx) = targets.iter().position(|t| t.name == dep_name) {
                     let dep_incs = targets[dep_idx].include_directories.clone();
                     let dep_defs = targets[dep_idx].compile_definitions.clone();
 
@@ -748,8 +739,8 @@ pub fn parse_cmake_content_native(
 
     for cmd in commands {
         match cmd.name.as_str() {
-            "set" => {
-                if cmd.args.len() >= 2 {
+            "set"
+                if cmd.args.len() >= 2 => {
                     let var_name = cmd.args[0].clone();
                     let val_joined = cmd.args[1..].join(" ");
                     let resolved_val = resolve_variables(&val_joined, &variables);
@@ -767,37 +758,34 @@ pub fn parse_cmake_content_native(
                         }
                     }
                 }
-            }
             "include_directories" => {
                 for arg in &cmd.args {
                     add_include(arg, &variables, &current_dir, None, &mut result);
                 }
             }
-            "target_include_directories" => {
-                if cmd.args.len() >= 2 {
+            "target_include_directories"
+                if cmd.args.len() >= 2 => {
                     let target_name = &cmd.args[0];
                     let target_idx = get_or_create_target(target_name, "custom", &mut result.targets);
                     for arg in &cmd.args[1..] {
                         add_include(arg, &variables, &current_dir, Some(target_idx), &mut result);
                     }
                 }
-            }
             "add_definitions" => {
                 for arg in &cmd.args {
                     add_define(arg, &variables, None, &mut result);
                 }
             }
-            "target_compile_definitions" => {
-                if cmd.args.len() >= 2 {
+            "target_compile_definitions"
+                if cmd.args.len() >= 2 => {
                     let target_name = &cmd.args[0];
                     let target_idx = get_or_create_target(target_name, "custom", &mut result.targets);
                     for arg in &cmd.args[1..] {
                         add_define(arg, &variables, Some(target_idx), &mut result);
                     }
                 }
-            }
-            "add_executable" => {
-                if !cmd.args.is_empty() {
+            "add_executable"
+                if !cmd.args.is_empty() => {
                     let target_name = &cmd.args[0];
                     let target_idx = get_or_create_target(target_name, "executable", &mut result.targets);
                     result.targets[target_idx].target_type = "executable".to_string();
@@ -821,9 +809,8 @@ pub fn parse_cmake_content_native(
                         }
                     }
                 }
-            }
-            "add_library" => {
-                if !cmd.args.is_empty() {
+            "add_library"
+                if !cmd.args.is_empty() => {
                     let target_name = &cmd.args[0];
                     let mut target_type = "library".to_string();
                     let mut src_start = 1;
@@ -873,9 +860,8 @@ pub fn parse_cmake_content_native(
                         }
                     }
                 }
-            }
-            "target_sources" => {
-                if cmd.args.len() >= 2 {
+            "target_sources"
+                if cmd.args.len() >= 2 => {
                     let target_name = &cmd.args[0];
                     let target_idx = get_or_create_target(target_name, "custom", &mut result.targets);
                     for s in &cmd.args[1..] {
@@ -888,9 +874,8 @@ pub fn parse_cmake_content_native(
                         result.targets[target_idx].source_files.push(full);
                     }
                 }
-            }
-            "target_link_libraries" => {
-                if cmd.args.len() >= 2 {
+            "target_link_libraries"
+                if cmd.args.len() >= 2 => {
                     let target_name = &cmd.args[0];
                     let target_idx = get_or_create_target(target_name, "custom", &mut result.targets);
                     for arg in &cmd.args[1..] {
@@ -917,7 +902,6 @@ pub fn parse_cmake_content_native(
                         }
                     }
                 }
-            }
             _ => {}
         }
     }

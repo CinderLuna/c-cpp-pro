@@ -47,30 +47,40 @@ C/C++ Pro combines the blazing index and AST completion speed of LLVM's **`clang
   - **Boost C++ Libraries** (`C:\local\boost_*`, `/usr/include/boost`)
   - **SDL2 / SDL3**
   - **vcpkg** and **Node-API** (`node-addon-api`, `nan`) includes
+- Detailed documentation: [Compiler & Toolchain Setup Wiki](https://github.com/CinderLuna/c-cpp-pro/wiki/Compiler-Toolchain-Setup).
 
 ### 3. Visual Studio Solution & Project Integration
 - **Solution Formats**: First-class support for traditional `.sln` and the modern XML-based `.slnx` solution formats.
 - **Project Parsing**: Extracts include directories, preprocessor definitions, language standards, and forced includes from `.vcxproj` files across all configurations (Debug/Release, x64/x86/ARM64).
 - **Compilation Database Generation**: Generates a unified `compile_commands.json` covering all C++ source files in the active solution.
 - **MSBuild Task Provider**: Generates build, rebuild, clean, and per-project tasks automatically accessible via VS Code's Task runner.
+- Detailed documentation: [Visual Studio Solution Support Wiki](https://github.com/CinderLuna/c-cpp-pro/wiki/Visual-Studio-Solution-Support).
 
-### 4. Integrated DAP Debugging & Run Controller
+### 4. Static CMake Intelligence
+- **In-Memory CMake Parsing**: Tokenizes and parses `CMakeLists.txt` files and `.cmake` modules statically without invoking CMake CLI binaries.
+- **Transitive Include Resolution**: Models `target_include_directories`, `target_compile_definitions`, and `target_link_libraries` transitive property propagation.
+- **Compilation Database Generation**: Synthesizes `compile_commands.json` on-demand with isolated target private includes and per-file C/C++ language standards.
+- Detailed documentation: [Static CMake Integration Wiki](https://github.com/CinderLuna/c-cpp-pro/wiki/Static-CMake-Integration).
+
+### 5. Integrated DAP Debugging & Run Controller
 - **Zero-Setup Debugging**: Seamlessly hooks into `lldb-dap`, GDB (`--interpreter=dap`), or MSVC for native C/C++ debugging.
 - **Automatic Launch Generation**: Pre-configured launch configurations with dynamic workspace variable resolution (`${fileBasenameNoExtension}`, `${workspaceFolder}`).
 - **Interactive Process Picker**: Select running processes to attach with cross-platform PID and name resolution.
 - **Evaluatable Expression Provider**: Evaluate nested member accesses (`a->b.c`), indexed arrays (`arr[i]`), and pointers when hovering during debug breaks.
 - **Run & Debug Editor Title Actions**: One-click play and debug buttons in the editor title bar with automated Visual Studio Developer Shell (`vcvarsall`) environment injection on Windows.
+- Detailed documentation: [Debugging Guide Wiki](https://github.com/CinderLuna/c-cpp-pro/wiki/Debugging-Guide).
 
-### 5. Type & Memory Layout Inspector
+### 6. Type & Memory Layout Inspector
 - Inspect struct and class memory layouts directly inside the editor (`c-cpp-pro.inspectMemoryLayout`).
 - Visualize field byte offsets, member sizes, struct alignment, and wasted memory from padding holes.
 - Visual indicators for 64-byte CPU cache line boundaries to optimize data structures for cache locality.
+- Detailed documentation: [Memory Layout Inspector Wiki](https://github.com/CinderLuna/c-cpp-pro/wiki/Memory-Layout-Inspector).
 
-### 6. Include Tree & Build Bottleneck Visualizer
+### 7. Include Tree & Build Bottleneck Visualizer
 - **Header Dependency Hierarchy**: Analyze `#include` trees, detect circular inclusion cycles, and receive optimization tips for heavy headers (`c-cpp-pro.analyzeIncludes`).
 - **Clang `-ftime-trace` Profiling**: Inspect Chrome tracing JSON files to pinpoint slow template instantiations and expensive header parse times (`c-cpp-pro.visualizeTimeTrace`).
 
-### 7. Modern C++ Test Explorer
+### 8. Modern C++ Test Explorer
 - Native VS Code Test Explorer integration for modern C++ testing frameworks.
 - Automatically discovers tests, suites, and scenarios for:
   - **GoogleTest** (`TEST`, `TEST_F`, `TEST_P`)
@@ -78,18 +88,18 @@ C/C++ Pro combines the blazing index and AST completion speed of LLVM's **`clang
   - **doctest** (`TEST_CASE`)
   - **Boost.Test** (`BOOST_AUTO_TEST_CASE`)
 
-### 8. Macro Expansion & Compile-Time Evaluation
+### 9. Macro Expansion & Compile-Time Evaluation
 - **Step-by-Step Macro Expansion**: Preview complex object-like and function-like macro expansions directly at cursor position (`c-cpp-pro.expandMacro`).
 - **`constexpr` Evaluation**: Preview compile-time evaluations and constant folding results (`c-cpp-pro.evaluateConstexpr`).
 
-### 9. Inline Disassembly & Compiler Explorer
+### 10. Inline Disassembly & Compiler Explorer
 - Open inline assembly output alongside your C++ code (`c-cpp-pro.viewDisassembly`).
 - Filter compiler directives, labels, and comments with customizable optimization flags (`-O0`, `-O1`, `-O2`, `-O3`, `-Os`, `-Oz`).
 
-### 10. Semantic Symbol Hierarchy Graphs
+### 11. Semantic Symbol Hierarchy Graphs
 - Generate Mermaid diagrams visualizing class inheritance and symbol relationships (`c-cpp-pro.showTypeHierarchy`).
 
-### 11. Configuration Editor & Multi-Target Profiles
+### 12. Configuration Editor & Multi-Target Profiles
 - Modern graphical Webview editor (`c-cpp-pro.openSettings`) to configure include paths, preprocessor defines, compiler paths, and C/C++ language standards.
 - Supports `.vscode/c_cpp_properties.json` and Linux/RTOS Kconfig (`.config`) files.
 - Visual Studio Developer Environment switcher (`c-cpp-pro.setVsDeveloperEnvironment`) to quickly initialize compiler environments.
