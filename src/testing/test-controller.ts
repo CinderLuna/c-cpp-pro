@@ -372,13 +372,16 @@ export class CppTestController implements vscode.Disposable {
       if (token.isCancellationRequested) break;
 
       if (item.id === 'ctest-root') {
-        item.children.forEach((child) => {
-          if (!token.isCancellationRequested) {
-            CTestRunner.executeTest(child, run, buildDir);
-          }
-        });
+        const children: vscode.TestItem[] = [];
+        item.children.forEach((child) => children.push(child));
+        for (const child of children) {
+          if (token.isCancellationRequested) break;
+          const childBuildDir = child.uri ? path.dirname(child.uri.fsPath) : buildDir;
+          await CTestRunner.executeTest(child, run, childBuildDir);
+        }
       } else if (item.id.startsWith('ctest::')) {
-        await CTestRunner.executeTest(item, run, buildDir);
+        const itemBuildDir = item.uri ? path.dirname(item.uri.fsPath) : buildDir;
+        await CTestRunner.executeTest(item, run, itemBuildDir);
       } else {
         run.passed(item);
       }

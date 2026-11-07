@@ -78,6 +78,7 @@ export class CMakePresetsParser {
       .replace(/\$\{presetName\}/g, presetName)
       .replace(/\$\{generator\}/g, generator || 'Ninja')
       .replace(/\$\{hostSystemName\}/g, hostSystemName)
+      .replace(/\$\{pathListSep\}/g, path.delimiter)
       .replace(/\$\{dollar\}/g, '$')
       .replace(/\$\{env:([^}]+)\}/g, (_match, varName) => process.env[varName] || '')
       .replace(/\$\{penv:([^}]+)\}/g, (_match, varName) => process.env[varName] || '');

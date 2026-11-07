@@ -120,6 +120,14 @@ export class SingleFileCompiler implements vscode.Disposable {
     const startTime = Date.now();
 
     return new Promise((resolve) => {
+      let settled = false;
+      const settle = (success: boolean) => {
+        if (!settled) {
+          settled = true;
+          resolve(success);
+        }
+      };
+
       let child;
       try {
         child = spawn(bin, args, {
@@ -130,7 +138,7 @@ export class SingleFileCompiler implements vscode.Disposable {
       } catch (err: any) {
         this.outputChannel.appendLine(`Execution failed: ${err.message}`);
         vscode.window.showErrorMessage(`Failed to spawn compiler: ${err.message}`);
-        resolve(false);
+        settle(false);
         return;
       }
 
@@ -155,19 +163,19 @@ export class SingleFileCompiler implements vscode.Disposable {
             `C/C++ Pro: Compiled ${path.basename(targetFile)} (${duration}ms)`,
             4000
           );
-          resolve(true);
+          settle(true);
         } else {
           this.outputChannel.appendLine(`Compilation failed with exit code ${code} (${duration}ms).`);
           vscode.window.showErrorMessage(
             `Compilation failed for ${path.basename(targetFile)} (exit code ${code}). Check Problems tab.`
           );
-          resolve(false);
+          settle(false);
         }
       });
 
       child.on('error', (err) => {
         this.outputChannel.appendLine(`Spawn error: ${err.message}`);
-        resolve(false);
+        settle(false);
       });
     });
   }

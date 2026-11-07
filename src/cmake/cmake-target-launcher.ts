@@ -123,16 +123,13 @@ export class CMakeTargetLauncher implements vscode.Disposable {
       return;
     }
 
-    const term = vscode.window.createTerminal(`Run: ${target.name}`);
-    term.show();
-
     const cwd = target.workingDirectory || path.dirname(target.binaryPath);
-    if (process.platform === 'win32') {
-      term.sendText(`cd /d "${cwd}"`);
-      term.sendText(`"${target.binaryPath}"`);
-    } else {
-      term.sendText(`cd "${cwd}" && "${target.binaryPath}"`);
-    }
+    const term = vscode.window.createTerminal({
+      name: `Run: ${target.name}`,
+      cwd: cwd
+    });
+    term.show();
+    term.sendText(`"${target.binaryPath}"`);
   }
 
   private updateStatusBar(): void {

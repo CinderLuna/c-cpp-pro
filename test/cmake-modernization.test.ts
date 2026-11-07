@@ -143,13 +143,14 @@ describe('CMake Modernization Subsystems (Issue #5)', () => {
 
   describe('CMakePresetsParser', () => {
     it('should perform macro substitution correctly', () => {
-      const template = '${sourceDir}/build/${presetName}-${generator}-${hostSystemName}';
+      const template = '${sourceDir}/build/${presetName}-${generator}-${hostSystemName}-${pathListSep}';
       const expanded = CMakePresetsParser.expandMacros(template, tempDir, 'x64-Debug', 'Ninja');
 
       assert.ok(expanded.startsWith(tempDir.replace(/\\/g, '/')));
       assert.ok(expanded.includes('x64-Debug'));
       assert.ok(expanded.includes('Ninja'));
       assert.ok(expanded.includes(process.platform === 'win32' ? 'Windows' : process.platform === 'linux' ? 'Linux' : 'Darwin'));
+      assert.ok(expanded.includes(path.delimiter));
     });
 
     it('should load CMakePresets.json and merge with CMakeUserPresets.json', () => {
@@ -305,6 +306,7 @@ describe('CMake Modernization Subsystems (Issue #5)', () => {
         cmake_minimum_required(VERSION 3.20)
         project(SampleApp)
 
+        # add_executable(IgnoredCommentedOutApp src/ignored.cpp)
         add_executable(ServerApp src/server.cpp)
         add_library(SharedUtils SHARED src/utils.cpp)
         target_sources(ServerApp PRIVATE src/extra.cpp)
@@ -318,6 +320,12 @@ describe('CMake Modernization Subsystems (Issue #5)', () => {
       assert.strictEqual(targets[1].type, 'library');
       assert.strictEqual(targets[2].name, 'ServerApp');
       assert.strictEqual(targets[2].type, 'sources');
+    });
+
+    it('should insert source file into single-line target_sources correctly', () => {
+      const cmakeLists = 'target_sources(MyDaemon PRIVATE src/daemon.cpp)';
+      const updated = CMakeListsModifier.insertSourceIntoTarget(cmakeLists, 'MyDaemon', 'src/worker.cpp');
+      assert.strictEqual(updated, 'target_sources(MyDaemon PRIVATE src/daemon.cpp src/worker.cpp)');
     });
 
     it('should insert source file into existing target_sources or add_executable block', () => {

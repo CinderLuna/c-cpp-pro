@@ -20,6 +20,8 @@ export class CMakeListsModifier {
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
+      const trimmed = line.trim();
+      if (trimmed.startsWith('#')) continue;
 
       // Match add_executable(name ...)
       const execMatch = /\badd_executable\s*\(\s*([A-Za-z0-9_+-]+)/i.exec(line);
@@ -83,13 +85,20 @@ export class CMakeListsModifier {
       const line = lines[i];
       const match = new RegExp(`\\btarget_sources\\s*\\(\\s*${targetName}\\b`, 'i').exec(line);
       if (match) {
+        if (line.includes(')')) {
+          const closeIdx = line.lastIndexOf(')');
+          const updatedLine = line.slice(0, closeIdx).trimEnd() + ` ${normSource}` + line.slice(closeIdx);
+          lines[i] = updatedLine;
+          return lines.join('\n');
+        }
+
         // Find closing parenthesis of this target_sources call
-        for (let j = i; j < lines.length; j++) {
+        for (let j = i + 1; j < lines.length; j++) {
           const closeIdx = lines[j].indexOf(')');
           if (closeIdx !== -1) {
             // Determine indentation
-            const indentMatch = /^\s*/.exec(lines[i]);
-            const indent = indentMatch ? indentMatch[0] + '  ' : '  ';
+            const indentMatch = /^\s*/.exec(lines[i + 1] || lines[i]);
+            const indent = indentMatch ? indentMatch[0] : '  ';
             lines.splice(j, 0, `${indent}${normSource}`);
             return lines.join('\n');
           }
