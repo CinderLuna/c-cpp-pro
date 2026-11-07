@@ -503,7 +503,7 @@ pub fn parse_vcxproj_content_native(
                                 continue;
                             }
                             if trimmed.starts_with('\"') && trimmed.ends_with('\"') && trimmed.len() >= 2 {
-                                trimmed = &trimmed[1..trimmed.len() - 1].trim();
+                                trimmed = trimmed[1..trimmed.len() - 1].trim();
                             }
                             let expanded = trimmed
                                 .replace("$(ProjectDir)", &(normalize_slash(&project_dir) + "/"))

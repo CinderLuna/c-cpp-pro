@@ -644,8 +644,9 @@
   },
   "license": "MIT",
   "scripts": {
-    "vscode:prepublish": "npm run build",
+    "vscode:prepublish": "npm run build:prod",
     "build": "npm run build:native && node esbuild.js",
+    "build:prod": "npm run build:native && node esbuild.js --production",
     "build:native": "node scripts/build-native.js",
     "watch": "node esbuild.js --watch",
     "clean": "node -e \"const fs = require('fs'); ['dist', 'out'].forEach(d => fs.rmSync(d, { recursive: true, force: true })); fs.readdirSync('.').filter(f => f.endsWith('.vsix') || f.endsWith('.obj') || f.endsWith('.pdb') || f.endsWith('.ilk')).forEach(f => fs.rmSync(f, { force: true }));\"",

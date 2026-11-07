@@ -73,11 +73,10 @@ pub fn parse_trace_events(json_content: &str) -> Result<TimeTraceSummaryNative, 
         let name = event.name.as_deref().unwrap_or("");
         let dur = event.dur.unwrap_or(0.0);
 
-        if name == "Total ExecuteCompiler" || name == "ExecuteCompiler" {
-            if dur > total_duration_us {
+        if (name == "Total ExecuteCompiler" || name == "ExecuteCompiler")
+            && dur > total_duration_us {
                 total_duration_us = dur;
             }
-        }
 
         if name == "Source" {
             if let Some(args) = &event.args {
@@ -200,7 +199,7 @@ pub fn parse_trace_events(json_content: &str) -> Result<TimeTraceSummaryNative, 
             }
         })
         .collect();
-    slowest_headers.sort_by(|a, b| b.duration_ms.cmp(&a.duration_ms));
+    slowest_headers.sort_by_key(|b| std::cmp::Reverse(b.duration_ms));
     slowest_headers.truncate(10);
 
     let mut slowest_templates: Vec<TemplateTiming> = template_map
@@ -210,7 +209,7 @@ pub fn parse_trace_events(json_content: &str) -> Result<TimeTraceSummaryNative, 
             duration_ms: (dur / 1000.0).round() as u32,
         })
         .collect();
-    slowest_templates.sort_by(|a, b| b.duration_ms.cmp(&a.duration_ms));
+    slowest_templates.sort_by_key(|b| std::cmp::Reverse(b.duration_ms));
     slowest_templates.truncate(10);
 
     let mut slowest_functions: Vec<FunctionTiming> = function_map
@@ -220,7 +219,7 @@ pub fn parse_trace_events(json_content: &str) -> Result<TimeTraceSummaryNative, 
             duration_ms: (dur / 1000.0).round() as u32,
         })
         .collect();
-    slowest_functions.sort_by(|a, b| b.duration_ms.cmp(&a.duration_ms));
+    slowest_functions.sort_by_key(|b| std::cmp::Reverse(b.duration_ms));
     slowest_functions.truncate(10);
 
     Ok(TimeTraceSummaryNative {
@@ -233,7 +232,7 @@ pub fn parse_trace_events(json_content: &str) -> Result<TimeTraceSummaryNative, 
 
 #[napi]
 pub fn parse_ftime_trace_content(content: String) -> napi::Result<TimeTraceSummaryNative> {
-    parse_trace_events(&content).map_err(|e| napi::Error::from_reason(e))
+    parse_trace_events(&content).map_err(napi::Error::from_reason)
 }
 
 #[napi]
@@ -245,7 +244,7 @@ pub async fn parse_ftime_trace_file(file_path: String) -> napi::Result<TimeTrace
     })
     .await
     .map_err(|e| napi::Error::from_reason(e.to_string()))?
-    .map_err(|e| napi::Error::from_reason(e))
+    .map_err(napi::Error::from_reason)
 }
 
 #[cfg(test)]

@@ -173,7 +173,7 @@ pub fn calculate_struct_layout_native(
     let is_packed = opts.is_packed.unwrap_or(false);
     let pack_max = opts
         .max_pack_alignment
-        .unwrap_or_else(|| if is_packed { 1 } else { 8 });
+        .unwrap_or(if is_packed { 1 } else { 8 });
     let data_model = opts
         .data_model
         .as_deref()
