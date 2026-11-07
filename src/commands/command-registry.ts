@@ -26,6 +26,9 @@ import { ClangTidyManager } from '../analysis/clang-tidy-manager';
 import { VsEnvironmentManager } from '../tasks/vs-environment-manager';
 import { ProcessPicker } from '../debugger/process-picker';
 import { ProjectCreator } from '../project/project-creator';
+import { CMakeListsModifier } from '../cmake/cmake-modifier';
+import * as path from 'path';
+import * as fs from 'fs';
 
 export interface CommandRegistryContext {
   extensionContext: vscode.ExtensionContext;
@@ -406,6 +409,38 @@ export function registerAllCommands(ctx: CommandRegistryContext): vscode.Disposa
         vscode.window.showInformationMessage(`C/C++ Pro: Generated compile_commands.json from CMakeLists.txt at ${target}`);
       } else {
         vscode.window.showWarningMessage('C/C++ Pro: Could not generate compile_commands.json.');
+      }
+    }),
+    vscode.commands.registerCommand('c-cpp-pro.cmake.selectConfigurePreset', async () => {
+      await cmakeManager?.selectConfigurePreset();
+    }),
+    vscode.commands.registerCommand('c-cpp-pro.cmake.selectBuildPreset', async () => {
+      await cmakeManager?.selectBuildPreset();
+    }),
+    vscode.commands.registerCommand('c-cpp-pro.cmake.selectLaunchTarget', async () => {
+      await cmakeManager?.getTargetLauncher().selectLaunchTarget();
+    }),
+    vscode.commands.registerCommand('c-cpp-pro.cmake.debugTarget', async () => {
+      await cmakeManager?.getTargetLauncher().debugTarget();
+    }),
+    vscode.commands.registerCommand('c-cpp-pro.cmake.launchTarget', () => {
+      cmakeManager?.getTargetLauncher().launchTarget();
+    }),
+    vscode.commands.registerCommand('c-cpp-pro.cmake.compileActiveFile', async () => {
+      await cmakeManager?.getSingleFileCompiler().compileActiveFile();
+    }),
+    vscode.commands.registerCommand('c-cpp-pro.cmake.addSourceToTarget', async (workspaceRoot: string, targetName: string, relativeSourcePath: string) => {
+      if (!workspaceRoot || !targetName || !relativeSourcePath) return;
+      const cmakeListsPath = path.join(workspaceRoot, 'CMakeLists.txt');
+      if (!fs.existsSync(cmakeListsPath)) return;
+      try {
+        const content = fs.readFileSync(cmakeListsPath, 'utf8');
+        const updated = CMakeListsModifier.insertSourceIntoTarget(content, targetName, relativeSourcePath);
+        fs.writeFileSync(cmakeListsPath, updated, 'utf8');
+        vscode.window.showInformationMessage(`Added ${path.basename(relativeSourcePath)} to target '${targetName}' in CMakeLists.txt`);
+        await cmakeManager?.refresh();
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Failed to update CMakeLists.txt: ${err.message}`);
       }
     })
   ];

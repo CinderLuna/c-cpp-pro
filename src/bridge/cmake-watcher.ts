@@ -37,7 +37,7 @@ export class CMakeWatcher implements vscode.Disposable {
   ) {
     // Watch for build artifacts and CMake configuration changes
     this.watcher = vscode.workspace.createFileSystemWatcher(
-      '{**/compile_commands.json,**/compile_flags.txt,**/.clangd,**/CMakeLists.txt,**/CMakePresets.json,**/CMakeUserPresets.json}'
+      '{**/compile_commands.json,**/compile_flags.txt,**/.clangd,**/CMakeLists.txt,**/CMakePresets.json,**/CMakeUserPresets.json,**/.cmake/api/v1/reply/*.json}'
     );
 
     this.disposables.push(

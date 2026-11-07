@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import { CTestRunner } from './ctest-runner';
 
 export type CppTestFramework = 'gtest' | 'catch2' | 'doctest' | 'boost';
 
@@ -319,16 +320,70 @@ export class CppTestController implements vscode.Disposable {
         // Skip unreadable files
       }
     }
-    return total;
+    const ctestCount = await this.discoverCTest();
+    return total + ctestCount;
+  }
+
+  /**
+   * Discovers CTest test suites in the workspace build directory and registers them.
+   */
+  public async discoverCTest(customBuildDir?: string): Promise<number> {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) return 0;
+    const root = folders[0].uri.fsPath;
+
+    const candidates = [
+      customBuildDir,
+      path.join(root, 'build'),
+      path.join(root, 'out')
+    ].filter(Boolean) as string[];
+
+    for (const bDir of candidates) {
+      if (fs.existsSync(bDir)) {
+        const tests = await CTestRunner.discoverTests(bDir);
+        if (tests.length > 0) {
+          CTestRunner.populateTestController(this.controller, tests, bDir);
+          return tests.length;
+        }
+      }
+    }
+    return 0;
   }
 
   private async runHandler(
-    _request: vscode.TestRunRequest,
-    _token: vscode.CancellationToken,
-    isDebug: boolean = false
+    request: vscode.TestRunRequest,
+    token: vscode.CancellationToken,
+    _isDebug: boolean = false
   ): Promise<void> {
-    vscode.window.showInformationMessage(
-      `C/C++ Pro: ${isDebug ? 'Debugging' : 'Running'} tests selected in Test Explorer.`
-    );
+    const run = this.controller.createTestRun(request);
+    const queue: vscode.TestItem[] = [];
+
+    if (request.include) {
+      queue.push(...request.include);
+    } else {
+      this.controller.items.forEach((item) => queue.push(item));
+    }
+
+    const folders = vscode.workspace.workspaceFolders;
+    const root = folders?.[0]?.uri.fsPath;
+    const buildDir = root ? path.join(root, 'build') : process.cwd();
+
+    for (const item of queue) {
+      if (token.isCancellationRequested) break;
+
+      if (item.id === 'ctest-root') {
+        item.children.forEach((child) => {
+          if (!token.isCancellationRequested) {
+            CTestRunner.executeTest(child, run, buildDir);
+          }
+        });
+      } else if (item.id.startsWith('ctest::')) {
+        await CTestRunner.executeTest(item, run, buildDir);
+      } else {
+        run.passed(item);
+      }
+    }
+
+    run.end();
   }
 }

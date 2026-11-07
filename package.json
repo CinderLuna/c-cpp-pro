@@ -157,6 +157,36 @@
         "category": "C/C++"
       },
       {
+        "command": "c-cpp-pro.cmake.selectConfigurePreset",
+        "title": "C/C++ Pro: Select CMake Configure Preset",
+        "category": "C/C++"
+      },
+      {
+        "command": "c-cpp-pro.cmake.selectBuildPreset",
+        "title": "C/C++ Pro: Select CMake Build Preset",
+        "category": "C/C++"
+      },
+      {
+        "command": "c-cpp-pro.cmake.selectLaunchTarget",
+        "title": "C/C++ Pro: Select Active CMake Launch Target",
+        "category": "C/C++"
+      },
+      {
+        "command": "c-cpp-pro.cmake.debugTarget",
+        "title": "C/C++ Pro: Debug Active CMake Target",
+        "category": "C/C++"
+      },
+      {
+        "command": "c-cpp-pro.cmake.launchTarget",
+        "title": "C/C++ Pro: Run Active CMake Target",
+        "category": "C/C++"
+      },
+      {
+        "command": "c-cpp-pro.cmake.compileActiveFile",
+        "title": "C/C++ Pro: Compile Active File (Syntax & Diagnostics)",
+        "category": "C/C++"
+      },
+      {
         "command": "c-cpp-pro.openSettings",
         "title": "C/C++ Pro: Open Configuration Panel",
         "category": "C/C++"
@@ -280,6 +310,13 @@
           "command": "c-cpp-pro.debugFile",
           "when": "editorLangId == cpp || editorLangId == c",
           "group": "navigation@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "c-cpp-pro.cmake.compileActiveFile",
+          "when": "editorLangId == cpp || editorLangId == c",
+          "group": "1_modification@10"
         }
       ]
     },
