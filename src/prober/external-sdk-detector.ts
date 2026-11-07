@@ -107,7 +107,18 @@ export function detectCompilerPreference(
       ];
       for (const compDb of compDbCandidates) {
         if (fs.existsSync(compDb)) {
-          const firstChunk = fs.readFileSync(compDb, { encoding: 'utf8', flag: 'r' }).slice(0, 4096);
+          let fd: number | undefined;
+          let firstChunk = '';
+          try {
+            fd = fs.openSync(compDb, 'r');
+            const buf = Buffer.alloc(4096);
+            const bytesRead = fs.readSync(fd, buf, 0, 4096, 0);
+            firstChunk = buf.toString('utf8', 0, bytesRead);
+          } finally {
+            if (fd !== undefined) {
+              fs.closeSync(fd);
+            }
+          }
           if (
             firstChunk.includes('g++') ||
             firstChunk.includes('gcc') ||
@@ -132,7 +143,7 @@ export function detectCompilerPreference(
   // 6. Inspect system PATH for toolchains
   const pathEnv = (env.PATH || env.Path || '').toLowerCase();
   const hasMinGwOnPath = pathEnv.includes('mingw') || pathEnv.includes('msys64');
-  const hasMsvcOnPath = pathEnv.includes('vc\\tools\\msvc') || pathEnv.includes('microsoft visual studio');
+  const hasMsvcOnPath = /(?:vc[\\/]tools[\\/]msvc|microsoft visual studio)/.test(pathEnv);
 
   if (hasMinGwOnPath && !hasMsvcOnPath) return 'mingw';
   if (hasMsvcOnPath && !hasMinGwOnPath) return 'msvc';
